@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=windows-1252" />
+	<meta name="viewport" content="width=device-width">
+	<style>
+		body {
+			font-family: Arial, Helvetica, Sans-Serif;
+			display: -webkit-box;
+			-webkit-box-pack: center;
+			-webkit-box-align: center;
+			margin-top: 120px;
+		}
+
+		@media (max-height: 700px) {
+			body {
+				height: 400px;
+			}
+		}
+
+		@media (min-height: 701px) and (max-height: 990px) {
+			body {
+				height: 700px;
+			}
+		}
+
+		@media (min-height: 991px) {
+			body {
+				height: 900px;
+			}
+		}
+
+		@media (max-height: 700px) {
+			.fs {
+				font-size: 20px;
+			}
+		}
+
+		@media (min-height: 701px) and (max-height: 990px) {
+			.fs {
+				font-size: 24px;
+			}
+		}
+
+		@media (min-height: 991px) {
+			.fs {
+				font-size: 32px;
+			}
+		}
+
+		@media (prefers-color-scheme: dark) {
+			body {
+				background-color: #121212;
+				color: #e0e0e0;
+			}
+
+			.fs {
+				color: #90caf9;
+			}
+
+			.slider {
+				background-color: #555;
+			}
+
+			.switch input:checked+.slider {
+				background-color: #2196F3;
+			}
+
+			.svg-img use {
+				fill: #4CAF50;
+			}
+		}
+
+		@media (prefers-color-scheme: light) {
+			body {
+				background-color: #ffffff;
+				color: #000088;
+			}
+
+			.fs {
+				color: #000088;
+			}
+
+			.slider {
+				background-color: #ccc;
+			}
+
+			.switch input:checked+.slider {
+				background-color: #2196F3;
+			}
+
+			.svg-img use {
+				fill: #4CAF50;
+			}
+		}
+
+		.sp-time {
+			display: inline-grid;
+			text-align: center;
+			font-size: 2em;
+			width: 1.5em;
+		}
+
+		.duration-controls {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			margin: 1em auto;
+		}
+
+		.duration-group {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			margin-bottom: 1em;
+		}
+
+		.duration-row {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 0.5em;
+		}
+
+		.svg-img {
+			width: 2.5em;
+			height: 2.5em;
+			margin: 0.2em;
+			user-select: none;
+			-webkit-user-select: none;
+			-moz-user-select: none;
+			-ms-user-select: none;
+			touch-action: manipulation;
+		}
+
+		.slider-toggle {
+			display: inline-block;
+			position: relative;
+			width: 120px;
+			height: 68px;
+			margin-top: 1em;
+		}
+
+		.slider-toggle input {
+			position: absolute;
+			inset: 0;
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			z-index: 2;
+			cursor: pointer;
+			opacity: 0;
+			visibility: hidden;
+			pointer-events: all;
+		}
+
+		.slider-track {
+			position: absolute;
+			top: 0;
+			left: 0;
+			width: 100%;
+			height: 100%;
+			background-color: #ccc;
+			border-radius: 34px;
+			transition: background-color 0.4s ease;
+			overflow: hidden;
+			pointer-events: none;
+			display: flex;
+			align-items: center;
+			padding: 0;
+		}
+
+		.slider-track::before {
+			content: "";
+			display: block;
+			height: 52px;
+			width: 52px;
+			background-color: white;
+			border-radius: 50%;
+			transition: transform 0.4s ease;
+			transform: translateX(0);
+			margin-left: 4px;
+			will-change: transform;
+		}
+
+		.slider-toggle input:checked+.slider-track {
+			background-color: #2196F3;
+		}
+
+		.slider-toggle input:checked+.slider-track::before {
+			transform: translateX(56px);
+		}
+
+		.slider-track {
+			transform: translateZ(0);
+		}
+	</style>
+</head>
+
+<body>
+	<svg xmlns="http://www.w3.org/2000/svg" style="display:none;">
+		<symbol id="icon-plus" viewBox="0 0 24 24">
+			<rect width="24" height="24" rx="4" fill="#4CAF50" />
+			<path d="M12 7v10M7 12h10" stroke="#fff" stroke-width="2" stroke-linecap="round" />
+		</symbol>
+
+		<symbol id="icon-minus" viewBox="0 0 24 24">
+			<rect width="24" height="24" rx="4" fill="#4CAF50" />
+			<path d="M7 12h10" stroke="#fff" stroke-width="2" stroke-linecap="round" />
+		</symbol>
+	</svg>
+	<div>
+
+		<h1 class="duration-controls">
+			<div class="duration-group">
+				<div class="duration-row">
+					<svg id="plus_s" class="svg-img">
+						<use href="#icon-plus" />
+					</svg>
+					<span id="duration_s" class="sp-time">0</span>
+					<svg id="minus_s" class="svg-img">
+						<use href="#icon-minus" />
+					</svg>
+				</div>
+				<span class="fs">Seconds</span>
+			</div>
+
+			<div class="duration-group">
+				<div class="duration-row">
+					<svg id="plus_m" class="svg-img">
+						<use href="#icon-plus" />
+					</svg>
+					<span id="duration_m" class="sp-time">0</span>
+					<svg id="minus_m" class="svg-img">
+						<use href="#icon-minus" />
+					</svg>
+				</div>
+				<span class="fs">Minutes</span>
+			</div>
+
+			<div class="duration-group">
+				<div class="duration-row">
+					<svg id="plus_h" class="svg-img">
+						<use href="#icon-plus" />
+					</svg>
+					<span id="duration_h" class="sp-time">0</span>
+					<svg id="minus_h" class="svg-img">
+						<use href="#icon-minus" />
+					</svg>
+				</div>
+				<span class="fs">Hours</span>
+			</div>
+
+			<label class="slider-toggle">
+				<input type="checkbox" id="switch_on_off">
+				<span class="slider-track"></span>
+			</label>
+
+		</h1>
+		<div style="margin-top: 30px;">
+			<h3>Build: __DATE__</h3>
+			<h3>Uptime: <span id="uptime">0 00:00:00</span></h3>
+			<h3><a href="/clear">Reset WiFi</a></h3>
+		</div>
+	</div>
+	</div>
+	<script>
+		window.addEventListener('load', function () {
+			const durations = ['h', 'm', 's'];
+			const uptime = document.getElementById('uptime');
+			const h = document.getElementById('duration_h');
+			const m = document.getElementById('duration_m');
+			const s = document.getElementById('duration_s');
+			const plus = durations.map(id => document.getElementById('plus_' + id));
+			const minus = durations.map(id => document.getElementById('minus_' + id));
+			const switch_state = document.getElementById('switch_on_off');
+
+			let uptime_sec = 0, remaining_time_sec = 0;
+			let uptime_timer = null;
+			const pad0 = (n) => String(Math.floor(n)).padStart(2, '0');
+
+			const set_duration = () => {
+				s.innerHTML = remaining_time_sec % 60;
+				m.innerHTML = Math.floor(remaining_time_sec / 60) % 60;
+				h.innerHTML = Math.floor(remaining_time_sec / 3600);
+				switch_state.disabled = remaining_time_sec == 0;
+				if (remaining_time_sec == 0) {
+					switch_state.checked = false;
+				}
+			}
+			const enableDisableControls = () => {
+				const disabled = switch_state.checked;
+				plus.forEach(e => e.style.pointerEvents =  disabled ? 'none' : 'auto');
+				plus.forEach(e => e.style.opacity =        disabled ? '0.5' : '1');
+				minus.forEach(e => e.style.pointerEvents = disabled ? 'none' : 'auto');
+				minus.forEach(e => e.style.opacity =       disabled ? '0.5' : '1');
+			};
+
+			const start_uptime_timer = () => {
+				if (uptime_timer !== null) return;
+				uptime_timer = setInterval(() => {
+					uptime_sec += 1000;
+					const sec = uptime_sec / 1000;
+					const min = sec / 60;
+					const hr = sec / 3600;
+					const d = hr / 24;
+					uptime.innerHTML = `${Math.floor(d)} ${pad0(hr % 24)}:${pad0(min % 60)}:${pad0(sec % 60)}`;
+					if (remaining_time_sec > 0 && switch_state.checked) {
+						remaining_time_sec--;
+						set_duration();
+					}
+				}, 1000);
+			};
+
+			const stop_uptime_timer = () => {
+				if (uptime_timer !== null) {
+					clearInterval(uptime_timer);
+					uptime_timer = null;
+				}
+			};
+
+			const websocket = new WebSocket(`ws://${window.location.hostname}/ws`);
+			window.websocket = websocket;
+
+			websocket.onopen = function () {
+				console.log('WebSocket connected');
+				start_uptime_timer();
+			};
+
+			websocket.onclose = function () {
+				console.warn('WebSocket disconnected — stopping uptime');
+				stop_uptime_timer();
+			};
+
+			websocket.onmessage = function (event) {
+				try {
+					if (!event.data.startsWith("{")) {
+						const logMessage = event.data.replace("[log]:", "");
+						console.log(logMessage);
+						return;
+					}
+					console.log(`event.data: ${event.data}`);
+					const data = JSON.parse(event.data);
+					if (data['uptime']) {
+						uptime_sec = parseInt(data['uptime']) * 1000;
+					}
+
+					remaining_time_sec = parseInt(data['remaining_time']) || 0;
+					switch_state.checked = remaining_time_sec != 0;
+					enableDisableControls();
+					set_duration();
+				} catch (error) {
+					console.error(error);
+				}
+			};
+
+			const websocket_send_msg = () => {
+				remaining_time_sec = switch_state.checked ? remaining_time_sec : 0;
+				enableDisableControls();
+
+				const msg = 'set_duration:' + remaining_time_sec;
+				if (websocket.readyState === WebSocket.OPEN) {
+					console.log(`websocket.send: ${msg}`);
+					websocket.send(msg);
+				} else {
+					console.warn('WebSocket is not open, cannot send message');
+				}
+			};
+
+			document.getElementById('switch_on_off').onclick = websocket_send_msg;
+
+			['h', 'm', 's'].forEach(id => {
+				document.getElementById('plus_' + id).onclick = () => {
+					switch (id) {
+						case 'h': remaining_time_sec += 3600; break;
+						case 'm': remaining_time_sec += 60; break;
+						case 's': remaining_time_sec += 1; break;
+					}
+					set_duration();
+				};
+				document.getElementById('minus_' + id).onclick = () => {
+					if (remaining_time_sec == 0) return;
+					switch (id) {
+						case 'h': remaining_time_sec -= 3600; break;
+						case 'm': remaining_time_sec -= 60; break;
+						case 's': remaining_time_sec -= 1; break;
+					}
+					if (remaining_time_sec < 0) remaining_time_sec = 0;
+					set_duration();
+				};
+			});
+		});
+	</script>
+</body>
+
+</html>
