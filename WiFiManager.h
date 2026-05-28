@@ -2,6 +2,7 @@
 #include <ESPAsyncWebServer.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include "WiFiConfig.h"
 
 #include <algorithm>
 #include <vector>
@@ -40,8 +41,8 @@ class WiFiManager {
 
    public:
 	WiFiManager(AsyncWebServer& srv,
-				 const char* apSSID = "SetupAP",
-				 const char* apPASS = "setup123",
+				 const char* apSSID = WiFiConfig::kApSsid,
+				 const char* apPASS = WiFiConfig::kApPassword,
 				 unsigned long retry_ms = 60000,
 				 unsigned long ap_timeout_ms = 60000)
 		: server(srv),
@@ -196,7 +197,22 @@ class WiFiManager {
 	void startAP() {
 		Serial.println("[WiFiManager] Starting AP...");
 		WiFi.mode(WIFI_AP);
+		IPAddress ap_ip;
+		if (!ap_ip.fromString(WiFiConfig::kApIp)) {
+			Serial.println("[WiFiManager] Invalid kApIp config, using 192.168.4.1");
+			ap_ip = IPAddress(192, 168, 4, 1);
+		}
+		IPAddress ap_gateway = ap_ip;
+		IPAddress ap_subnet;
+		if (!ap_subnet.fromString(WiFiConfig::kApSubnet)) {
+			Serial.println("[WiFiManager] Invalid kApSubnet config, using 255.255.255.0");
+			ap_subnet = IPAddress(255, 255, 255, 0);
+		}
+		if (!WiFi.softAPConfig(ap_ip, ap_gateway, ap_subnet)) {
+			Serial.println("[WiFiManager] softAPConfig failed, using defaults.");
+		}
 		WiFi.softAP(ap_ssid, ap_pass);
+		Serial.println(String("[WiFiManager] Captive portal: http://") + WiFiConfig::kApIp);
 		ap_mode = true;
 		ap_start = millis();
 

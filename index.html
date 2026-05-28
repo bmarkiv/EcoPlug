@@ -7,139 +7,191 @@
 	<style>
 		body {
 			font-family: Arial, Helvetica, Sans-Serif;
-			display: -webkit-box;
-			-webkit-box-pack: center;
-			-webkit-box-align: center;
-			margin-top: 120px;
+			margin: 0;
+			padding: 20px;
+			display: flex;
+			justify-content: center;
 		}
 
-		@media (max-height: 700px) {
-			body {
-				height: 400px;
-			}
-		}
-
-		@media (min-height: 701px) and (max-height: 990px) {
-			body {
-				height: 700px;
-			}
-		}
-
-		@media (min-height: 991px) {
-			body {
-				height: 900px;
-			}
-		}
-
-		@media (max-height: 700px) {
-			.fs {
-				font-size: 20px;
-			}
-		}
-
-		@media (min-height: 701px) and (max-height: 990px) {
-			.fs {
-				font-size: 24px;
-			}
-		}
-
-		@media (min-height: 991px) {
-			.fs {
-				font-size: 32px;
-			}
+		.panel {
+			width: min(640px, 100%);
+			border-radius: 14px;
+			padding: 18px;
+			box-sizing: border-box;
 		}
 
 		@media (prefers-color-scheme: dark) {
 			body {
-				background-color: #121212;
-				color: #e0e0e0;
+				background-color: #111315;
+				color: #e5e7eb;
 			}
 
-			.fs {
-				color: #90caf9;
+			.panel {
+				background: #1b2025;
+				box-shadow: 0 0 0 1px #2b3138;
 			}
 
-			.slider {
-				background-color: #555;
+			.subtle {
+				color: #9ca3af;
 			}
 
-			.switch input:checked+.slider {
-				background-color: #2196F3;
+			.input,
+			.day-btn,
+			.primary,
+			.secondary {
+				background: #232a31;
+				color: #e5e7eb;
+				border: 1px solid #3a4551;
 			}
 
-			.svg-img use {
-				fill: #4CAF50;
+			.primary {
+				background: #0f766e;
+				border-color: #14b8a6;
 			}
 		}
 
 		@media (prefers-color-scheme: light) {
 			body {
-				background-color: #ffffff;
-				color: #000088;
+				background-color: #f4f7fb;
+				color: #10243b;
 			}
 
-			.fs {
-				color: #000088;
+			.panel {
+				background: #ffffff;
+				box-shadow: 0 10px 30px rgba(16, 36, 59, 0.08);
 			}
 
-			.slider {
-				background-color: #ccc;
+			.subtle {
+				color: #4f647a;
 			}
 
-			.switch input:checked+.slider {
-				background-color: #2196F3;
+			.input,
+			.day-btn,
+			.primary,
+			.secondary {
+				background: #fff;
+				color: #10243b;
+				border: 1px solid #c9d5e3;
 			}
 
-			.svg-img use {
-				fill: #4CAF50;
+			.primary {
+				background: #0d9488;
+				color: #fff;
+				border-color: #0d9488;
 			}
 		}
 
-		.sp-time {
-			display: inline-grid;
+		h1,
+		h2,
+		h3 {
+			margin: 0 0 12px;
+		}
+
+		.section {
+			padding: 14px;
+			border-radius: 10px;
+			margin-bottom: 14px;
+			background: rgba(127, 127, 127, 0.08);
+		}
+
+		.row {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			flex-wrap: wrap;
+		}
+
+		.header-row {
+			display: flex;
+			justify-content: space-between;
+			align-items: flex-start;
+			gap: 12px;
+			margin-bottom: 12px;
+		}
+
+		.hours-display {
+			min-width: 92px;
 			text-align: center;
-			font-size: 2em;
-			width: 1.5em;
+			font-size: 1.8rem;
+			font-weight: 700;
 		}
 
-		.duration-controls {
-			display: flex;
-			flex-direction: column;
-			align-items: center;
-			margin: 1em auto;
+		.btn {
+			cursor: pointer;
+			padding: 10px 14px;
+			border-radius: 10px;
+			font-size: 1rem;
 		}
 
-		.duration-group {
-			display: flex;
-			flex-direction: column;
-			align-items: center;
-			margin-bottom: 1em;
-		}
-
-		.duration-row {
-			display: flex;
+		.icon-btn {
+			width: 44px;
+			height: 44px;
+			padding: 0;
+			display: inline-flex;
 			align-items: center;
 			justify-content: center;
-			gap: 0.5em;
+			border-radius: 8px;
 		}
 
-		.svg-img {
-			width: 2.5em;
-			height: 2.5em;
-			margin: 0.2em;
+		.icon-btn svg {
+			width: 26px;
+			height: 26px;
+		}
+
+		.icon-btn use {
+			fill: #14b8a6;
+		}
+
+		.btn:disabled {
+			opacity: 0.5;
+			cursor: default;
+		}
+
+		.primary,
+		.secondary {
+			padding: 10px 14px;
+			border-radius: 10px;
+			font-size: 0.95rem;
+			cursor: pointer;
+		}
+
+		.input {
+			padding: 10px;
+			border-radius: 8px;
+			font-size: 0.95rem;
+		}
+
+		.day-grid {
+			display: grid;
+			grid-template-columns: repeat(7, minmax(36px, 1fr));
+			gap: 6px;
+		}
+
+		.day-btn {
+			padding: 8px 0;
+			border-radius: 8px;
+			text-align: center;
+			cursor: pointer;
 			user-select: none;
-			-webkit-user-select: none;
-			-moz-user-select: none;
-			-ms-user-select: none;
-			touch-action: manipulation;
+		}
+
+		.day-btn.active {
+			background: #0d9488;
+			border-color: #0d9488;
+			color: #fff;
+		}
+
+		.switch-row {
+			display: flex;
+			align-items: center;
+			gap: 10px;
 		}
 
 		.slider-toggle {
 			display: inline-block;
 			position: relative;
-			width: 120px;
-			height: 68px;
-			margin-top: 1em;
+			width: 92px;
+			height: 52px;
 		}
 
 		.slider-toggle input {
@@ -148,52 +200,62 @@
 			width: 100%;
 			height: 100%;
 			margin: 0;
-			z-index: 2;
-			cursor: pointer;
 			opacity: 0;
-			visibility: hidden;
-			pointer-events: all;
+			cursor: pointer;
+			z-index: 2;
 		}
 
 		.slider-track {
 			position: absolute;
-			top: 0;
-			left: 0;
-			width: 100%;
-			height: 100%;
-			background-color: #ccc;
-			border-radius: 34px;
-			transition: background-color 0.4s ease;
-			overflow: hidden;
-			pointer-events: none;
-			display: flex;
-			align-items: center;
-			padding: 0;
+			inset: 0;
+			border-radius: 28px;
+			background-color: #c7d2de;
+			transition: background-color 0.25s ease;
 		}
 
 		.slider-track::before {
 			content: "";
-			display: block;
-			height: 52px;
-			width: 52px;
-			background-color: white;
+			position: absolute;
+			left: 4px;
+			top: 4px;
+			width: 44px;
+			height: 44px;
 			border-radius: 50%;
-			transition: transform 0.4s ease;
-			transform: translateX(0);
-			margin-left: 4px;
-			will-change: transform;
+			background: #fff;
+			transition: transform 0.25s ease;
 		}
 
 		.slider-toggle input:checked+.slider-track {
-			background-color: #2196F3;
+			background-color: #0d9488;
 		}
 
 		.slider-toggle input:checked+.slider-track::before {
-			transform: translateX(56px);
+			transform: translateX(40px);
 		}
 
-		.slider-track {
-			transform: translateZ(0);
+		.status {
+			font-size: 1.25rem;
+			font-weight: 700;
+		}
+
+		.status-inline {
+			text-align: right;
+			min-width: 120px;
+		}
+
+		@media (max-width: 520px) {
+			.header-row {
+				flex-direction: column;
+				align-items: flex-start;
+			}
+
+			.status-inline {
+				text-align: left;
+			}
+		}
+
+		a {
+			color: inherit;
 		}
 	</style>
 </head>
@@ -201,100 +263,154 @@
 <body>
 	<svg xmlns="http://www.w3.org/2000/svg" style="display:none;">
 		<symbol id="icon-plus" viewBox="0 0 24 24">
-			<rect width="24" height="24" rx="4" fill="#4CAF50" />
-			<path d="M12 7v10M7 12h10" stroke="#fff" stroke-width="2" stroke-linecap="round" />
+			<rect x="10.5" y="4" width="3" height="16" rx="1" />
+			<rect x="4" y="10.5" width="16" height="3" rx="1" />
 		</symbol>
-
 		<symbol id="icon-minus" viewBox="0 0 24 24">
-			<rect width="24" height="24" rx="4" fill="#4CAF50" />
-			<path d="M7 12h10" stroke="#fff" stroke-width="2" stroke-linecap="round" />
+			<rect x="4" y="10.5" width="16" height="3" rx="1" />
 		</symbol>
 	</svg>
-	<div>
-
-		<h1 class="duration-controls">
-			<div class="duration-group">
-				<div class="duration-row">
-					<svg id="plus_s" class="svg-img">
-						<use href="#icon-plus" />
-					</svg>
-					<span id="duration_s" class="sp-time">0</span>
-					<svg id="minus_s" class="svg-img">
-						<use href="#icon-minus" />
-					</svg>
-				</div>
-				<span class="fs">Seconds</span>
+	<div class="panel">
+		<div class="header-row">
+			<h1>Filter Timer</h1>
+			<div class="status-inline">
+				<div class="subtle">Time left</div>
+				<div id="time_left" class="status">0:00:00</div>
+			</div>
+		</div>
+		<div class="section">
+			<h2>Schedule</h2>
+			<div class="switch-row" style="margin-bottom: 10px;">
+				<input type="checkbox" id="schedule_enabled">
+				<label for="schedule_enabled">Enable weekly schedule</label>
 			</div>
 
-			<div class="duration-group">
-				<div class="duration-row">
-					<svg id="plus_m" class="svg-img">
-						<use href="#icon-plus" />
-					</svg>
-					<span id="duration_m" class="sp-time">0</span>
-					<svg id="minus_m" class="svg-img">
-						<use href="#icon-minus" />
-					</svg>
-				</div>
-				<span class="fs">Minutes</span>
+			<div class="subtle" style="margin-bottom: 6px;">Days</div>
+			<div class="day-grid" id="day_grid"></div>
+
+			<div class="row" style="margin-top: 12px;">
+				<label for="schedule_start">Start</label>
+				<input class="input" type="time" id="schedule_start" value="08:00">
+				<label for="schedule_duration_h">Duration</label>
+				<input class="input" type="number" id="schedule_duration_h" min="1" max="12" step="1" value="2">
+				<span>hours</span>
 			</div>
 
-			<div class="duration-group">
-				<div class="duration-row">
-					<svg id="plus_h" class="svg-img">
-						<use href="#icon-plus" />
-					</svg>
-					<span id="duration_h" class="sp-time">0</span>
-					<svg id="minus_h" class="svg-img">
-						<use href="#icon-minus" />
-					</svg>
-				</div>
-				<span class="fs">Hours</span>
+			<button class="primary" id="save_schedule" style="margin-top: 12px;">Save Schedule</button>
+			<div id="schedule_status" class="subtle" style="margin-top: 8px;"></div>
+		</div>
+
+		<div class="section">
+			<h2>Manual Run</h2>
+			<div class="row">
+				<button class="btn secondary icon-btn" id="minus_h" aria-label="Decrease hours">
+					<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-minus"></use></svg>
+				</button>
+				<div class="hours-display"><span id="duration_h">5</span>h</div>
+				<button class="btn secondary icon-btn" id="plus_h" aria-label="Increase hours">
+					<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-plus"></use></svg>
+				</button>
 			</div>
+			<div class="switch-row" style="margin-top: 10px;">
+				<label class="slider-toggle">
+					<input type="checkbox" id="switch_on_off">
+					<span class="slider-track"></span>
+				</label>
+				<label for="switch_on_off">Run now</label>
+			</div>
+		</div>
 
-			<label class="slider-toggle">
-				<input type="checkbox" id="switch_on_off">
-				<span class="slider-track"></span>
-			</label>
-
-		</h1>
-		<div style="margin-top: 30px;">
+		<div class="section">
 			<h3>Build: __DATE__</h3>
+			<h3>Current time: <span id="current_time">--</span></h3>
 			<h3>Uptime: <span id="uptime">0 00:00:00</span></h3>
 			<h3><a href="/clear">Reset WiFi</a></h3>
 		</div>
 	</div>
-	</div>
 	<script>
 		window.addEventListener('load', function () {
-			const durations = ['h', 'm', 's'];
 			const uptime = document.getElementById('uptime');
+			const currentTime = document.getElementById('current_time');
 			const h = document.getElementById('duration_h');
-			const m = document.getElementById('duration_m');
-			const s = document.getElementById('duration_s');
-			const plus = durations.map(id => document.getElementById('plus_' + id));
-			const minus = durations.map(id => document.getElementById('minus_' + id));
+			const timeLeft = document.getElementById('time_left');
+			const plusH = document.getElementById('plus_h');
+			const minusH = document.getElementById('minus_h');
 			const switch_state = document.getElementById('switch_on_off');
+			const scheduleEnabled = document.getElementById('schedule_enabled');
+			const scheduleStart = document.getElementById('schedule_start');
+			const scheduleDurationH = document.getElementById('schedule_duration_h');
+			const saveSchedule = document.getElementById('save_schedule');
+			const scheduleStatus = document.getElementById('schedule_status');
+			const dayGrid = document.getElementById('day_grid');
+
+			const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+			const dayButtons = [];
+			dayNames.forEach((name, idx) => {
+				const btn = document.createElement('button');
+				btn.type = 'button';
+				btn.className = 'day-btn';
+				btn.textContent = name;
+				btn.dataset.day = String(idx);
+				btn.onclick = () => btn.classList.toggle('active');
+				dayGrid.appendChild(btn);
+				dayButtons.push(btn);
+			});
 
 			let uptime_sec = 0, remaining_time_sec = 0;
+			let local_epoch_sec = -1;
+			let manual_hours = 5;
 			let uptime_timer = null;
 			const pad0 = (n) => String(Math.floor(n)).padStart(2, '0');
+			const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 
-			const set_duration = () => {
-				s.innerHTML = remaining_time_sec % 60;
-				m.innerHTML = Math.floor(remaining_time_sec / 60) % 60;
-				h.innerHTML = Math.floor(remaining_time_sec / 3600);
-				switch_state.disabled = remaining_time_sec == 0;
-				if (remaining_time_sec == 0) {
-					switch_state.checked = false;
-				}
-			}
-			const enableDisableControls = () => {
+			const durationToClock = (total) => {
+				const sec = Math.max(0, Math.floor(total));
+				const hr = Math.floor(sec / 3600);
+				const min = Math.floor(sec / 60) % 60;
+				const s = sec % 60;
+				return `${hr}:${pad0(min)}:${pad0(s)}`;
+			};
+
+			const renderManual = () => {
+				h.textContent = String(manual_hours);
 				const disabled = switch_state.checked;
-				plus.forEach(e => e.style.pointerEvents =  disabled ? 'none' : 'auto');
-				plus.forEach(e => e.style.opacity =        disabled ? '0.5' : '1');
-				minus.forEach(e => e.style.pointerEvents = disabled ? 'none' : 'auto');
-				minus.forEach(e => e.style.opacity =       disabled ? '0.5' : '1');
+				plusH.disabled = disabled;
+				minusH.disabled = disabled;
+			};
+
+			const renderTimeLeft = () => {
+				timeLeft.textContent = durationToClock(remaining_time_sec);
+			};
+
+			const renderCurrentTime = () => {
+				if (!Number.isFinite(local_epoch_sec) || local_epoch_sec < 0) {
+					currentTime.textContent = '--';
+					return;
+				}
+				const d = new Date(local_epoch_sec * 1000);
+				const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+				currentTime.textContent = `${days[d.getUTCDay()]} ${pad0(d.getUTCHours())}:${pad0(d.getUTCMinutes())}:${pad0(d.getUTCSeconds())}`;
+			};
+
+			const setDaysFromMask = (mask) => {
+				dayButtons.forEach((b, i) => {
+					b.classList.toggle('active', ((mask >> i) & 1) === 1);
+				});
+			};
+
+			const getDaysMask = () => {
+				let mask = 0;
+				dayButtons.forEach((b, i) => {
+					if (b.classList.contains('active')) mask |= (1 << i);
+				});
+				return mask;
+			};
+
+			const sendTimeSync = () => {
+				const epochSec = Math.floor(Date.now() / 1000);
+				const tzOffsetMin = new Date().getTimezoneOffset();
+				const msg = `sync_time:${epochSec}:${tzOffsetMin}`;
+				if (websocket.readyState === WebSocket.OPEN) websocket.send(msg);
 			};
 
 			const start_uptime_timer = () => {
@@ -306,9 +422,17 @@
 					const hr = sec / 3600;
 					const d = hr / 24;
 					uptime.innerHTML = `${Math.floor(d)} ${pad0(hr % 24)}:${pad0(min % 60)}:${pad0(sec % 60)}`;
+					if (local_epoch_sec >= 0) {
+						local_epoch_sec += 1;
+						renderCurrentTime();
+					}
 					if (remaining_time_sec > 0 && switch_state.checked) {
 						remaining_time_sec--;
-						set_duration();
+						renderTimeLeft();
+						if (remaining_time_sec === 0) {
+							switch_state.checked = false;
+							renderManual();
+						}
 					}
 				}, 1000);
 			};
@@ -326,6 +450,7 @@
 			websocket.onopen = function () {
 				console.log('WebSocket connected');
 				start_uptime_timer();
+				sendTimeSync();
 			};
 
 			websocket.onclose = function () {
@@ -348,21 +473,35 @@
 
 					remaining_time_sec = parseInt(data['remaining_time']) || 0;
 					switch_state.checked = remaining_time_sec != 0;
-					enableDisableControls();
-					set_duration();
+					renderTimeLeft();
+					renderManual();
+
+					scheduleEnabled.checked = (parseInt(data['schedule_enabled']) || 0) === 1;
+					const scheduleDays = parseInt(data['schedule_days']) || 0;
+					setDaysFromMask(scheduleDays);
+
+					const startMin = parseInt(data['schedule_start']) || 0;
+					const hh = Math.floor(startMin / 60);
+					const mm = startMin % 60;
+					scheduleStart.value = `${pad0(hh)}:${pad0(mm)}`;
+
+					const durationMin = parseInt(data['schedule_duration']) || 120;
+					scheduleDurationH.value = String(clamp(Math.round(durationMin / 60), 1, 12));
+
+					local_epoch_sec = parseInt(data['local_epoch']);
+					renderCurrentTime();
 				} catch (error) {
 					console.error(error);
 				}
 			};
 
 			const websocket_send_msg = () => {
-				remaining_time_sec = switch_state.checked ? remaining_time_sec : 0;
-				enableDisableControls();
-
-				const msg = 'set_duration:' + remaining_time_sec;
+				const targetSec = switch_state.checked ? manual_hours * 3600 : 0;
+				const msg = 'set_duration:' + targetSec;
 				if (websocket.readyState === WebSocket.OPEN) {
 					console.log(`websocket.send: ${msg}`);
 					websocket.send(msg);
+					renderManual();
 				} else {
 					console.warn('WebSocket is not open, cannot send message');
 				}
@@ -370,26 +509,36 @@
 
 			document.getElementById('switch_on_off').onclick = websocket_send_msg;
 
-			['h', 'm', 's'].forEach(id => {
-				document.getElementById('plus_' + id).onclick = () => {
-					switch (id) {
-						case 'h': remaining_time_sec += 3600; break;
-						case 'm': remaining_time_sec += 60; break;
-						case 's': remaining_time_sec += 1; break;
-					}
-					set_duration();
-				};
-				document.getElementById('minus_' + id).onclick = () => {
-					if (remaining_time_sec == 0) return;
-					switch (id) {
-						case 'h': remaining_time_sec -= 3600; break;
-						case 'm': remaining_time_sec -= 60; break;
-						case 's': remaining_time_sec -= 1; break;
-					}
-					if (remaining_time_sec < 0) remaining_time_sec = 0;
-					set_duration();
-				};
-			});
+			plusH.onclick = () => {
+				manual_hours = clamp(manual_hours + 1, 1, 12);
+				renderManual();
+			};
+
+			minusH.onclick = () => {
+				manual_hours = clamp(manual_hours - 1, 1, 12);
+				renderManual();
+			};
+
+			saveSchedule.onclick = () => {
+				const daysMask = getDaysMask();
+				const timeParts = (scheduleStart.value || '08:00').split(':');
+				const startMin = (parseInt(timeParts[0]) || 0) * 60 + (parseInt(timeParts[1]) || 0);
+				const durationHours = clamp(parseInt(scheduleDurationH.value) || 1, 1, 12);
+				const durationMin = durationHours * 60;
+				const enabled = scheduleEnabled.checked ? 1 : 0;
+
+				const msg = `set_schedule:${enabled}:${daysMask}:${startMin}:${durationMin}`;
+				if (websocket.readyState === WebSocket.OPEN) {
+					websocket.send(msg);
+					scheduleStatus.textContent = 'Schedule saved';
+				} else {
+					scheduleStatus.textContent = 'WebSocket disconnected';
+				}
+			};
+
+			renderManual();
+			renderTimeLeft();
+			renderCurrentTime();
 		});
 	</script>
 </body>
