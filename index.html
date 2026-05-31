@@ -329,6 +329,12 @@
 	</div>
 	<script>
 		window.addEventListener('load', function () {
+			const isRefill = window.location.pathname.startsWith('/refill');
+			const WS_PATH = isRefill ? '/ws_refill' : '/ws';
+			const PAGE_TITLE = isRefill ? 'Refill Timer' : 'Filter Timer';
+			const SCHEDULE_STORAGE_KEY_VAL = isRefill ? 'ecoplug_refill_v1' : 'ecoplug_schedule_v1';
+			document.querySelector('h1').textContent = PAGE_TITLE;
+
 			const uptime = document.getElementById('uptime');
 			const currentTime = document.getElementById('current_time');
 			const h = document.getElementById('duration_h');
@@ -343,7 +349,7 @@
 			const scheduleStatus = document.getElementById('schedule_status');
 			const dayGrid = document.getElementById('day_grid');
 
-			const SCHEDULE_STORAGE_KEY = 'ecoplug_schedule_v1';
+			const SCHEDULE_STORAGE_KEY = SCHEDULE_STORAGE_KEY_VAL;
 
 			const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 			const dayButtons = [];
@@ -491,7 +497,7 @@
 				}
 			};
 
-			const websocket = new WebSocket(`ws://${window.location.hostname}/ws`);
+			const websocket = new WebSocket(`ws://${window.location.hostname}${WS_PATH}`);
 			window.websocket = websocket;
 
 			websocket.onopen = function () {
