@@ -343,6 +343,8 @@
 			const scheduleStatus = document.getElementById('schedule_status');
 			const dayGrid = document.getElementById('day_grid');
 
+			const SCHEDULE_STORAGE_KEY = 'ecoplug_schedule_v1';
+
 			const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 			const dayButtons = [];
 			dayNames.forEach((name, idx) => {
@@ -357,7 +359,7 @@
 			});
 
 			let uptime_sec = 0, remaining_time_sec = 0;
-			let local_epoch_sec = -1;
+			let local_epoch_sec = Math.floor(Date.now() / 1000) - (new Date().getTimezoneOffset() * 60);
 			let manual_hours = 5;
 			let uptime_timer = null;
 			const pad0 = (n) => String(Math.floor(n)).padStart(2, '0');
@@ -397,6 +399,51 @@
 					b.classList.toggle('active', ((mask >> i) & 1) === 1);
 				});
 			};
+
+			const toIntOrNull = (value) => {
+				const n = parseInt(value, 10);
+				return Number.isFinite(n) ? n : null;
+			};
+
+			const loadScheduleUiCache = () => {
+				try {
+					const raw = localStorage.getItem(SCHEDULE_STORAGE_KEY);
+					if (!raw) return;
+					const cached = JSON.parse(raw);
+					if (cached && Number.isFinite(cached.daysMask)) {
+						setDaysFromMask(cached.daysMask & 0x7F);
+					}
+					if (cached && Number.isFinite(cached.enabled)) {
+						scheduleEnabled.checked = cached.enabled === 1;
+					}
+					if (cached && Number.isFinite(cached.startMin)) {
+						const hh = Math.floor(cached.startMin / 60);
+						const mm = cached.startMin % 60;
+						scheduleStart.value = `${pad0(hh)}:${pad0(mm)}`;
+					}
+					if (cached && Number.isFinite(cached.durationMin)) {
+						scheduleDurationH.value = String(clamp(Math.round(cached.durationMin / 60), 1, 12));
+					}
+				} catch (error) {
+					console.warn('Failed to read schedule cache', error);
+				}
+			};
+
+			const saveScheduleUiCache = (enabled, daysMask, startMin, durationMin) => {
+				try {
+					const payload = {
+						enabled,
+						daysMask,
+						startMin,
+						durationMin
+					};
+					localStorage.setItem(SCHEDULE_STORAGE_KEY, JSON.stringify(payload));
+				} catch (error) {
+					console.warn('Failed to persist schedule cache', error);
+				}
+			};
+
+			loadScheduleUiCache();
 
 			const getDaysMask = () => {
 				let mask = 0;
@@ -476,20 +523,42 @@
 					renderTimeLeft();
 					renderManual();
 
-					scheduleEnabled.checked = (parseInt(data['schedule_enabled']) || 0) === 1;
-					const scheduleDays = parseInt(data['schedule_days']) || 0;
-					setDaysFromMask(scheduleDays);
+					const hasScheduleFields =
+						Object.prototype.hasOwnProperty.call(data, 'schedule_enabled') &&
+						Object.prototype.hasOwnProperty.call(data, 'schedule_days') &&
+						Object.prototype.hasOwnProperty.call(data, 'schedule_start') &&
+						Object.prototype.hasOwnProperty.call(data, 'schedule_duration');
 
-					const startMin = parseInt(data['schedule_start']) || 0;
-					const hh = Math.floor(startMin / 60);
-					const mm = startMin % 60;
-					scheduleStart.value = `${pad0(hh)}:${pad0(mm)}`;
+					if (hasScheduleFields) {
+						const enabledNum = toIntOrNull(data['schedule_enabled']);
+						const scheduleDays = toIntOrNull(data['schedule_days']);
+						const startMin = toIntOrNull(data['schedule_start']);
+						const durationMin = toIntOrNull(data['schedule_duration']);
 
-					const durationMin = parseInt(data['schedule_duration']) || 120;
-					scheduleDurationH.value = String(clamp(Math.round(durationMin / 60), 1, 12));
+						if (enabledNum !== null) scheduleEnabled.checked = enabledNum === 1;
+						if (scheduleDays !== null) setDaysFromMask(scheduleDays & 0x7F);
+						if (startMin !== null) {
+							const hh = Math.floor(startMin / 60);
+							const mm = startMin % 60;
+							scheduleStart.value = `${pad0(hh)}:${pad0(mm)}`;
+						}
+						if (durationMin !== null) {
+							scheduleDurationH.value = String(clamp(Math.round(durationMin / 60), 1, 12));
+						}
 
-					local_epoch_sec = parseInt(data['local_epoch']);
-					renderCurrentTime();
+						saveScheduleUiCache(
+							enabledNum !== null ? (enabledNum === 1 ? 1 : 0) : (scheduleEnabled.checked ? 1 : 0),
+							scheduleDays !== null ? (scheduleDays & 0x7F) : getDaysMask(),
+							startMin !== null ? startMin : ((toIntOrNull(scheduleStart.value.split(':')[0]) || 0) * 60 + (toIntOrNull(scheduleStart.value.split(':')[1]) || 0)),
+							durationMin !== null ? durationMin : (clamp(parseInt(scheduleDurationH.value, 10) || 1, 1, 12) * 60)
+						);
+					}
+
+					const localEpoch = toIntOrNull(data['local_epoch']);
+					if (localEpoch !== null && localEpoch >= 0) {
+						local_epoch_sec = localEpoch;
+						renderCurrentTime();
+					}
 				} catch (error) {
 					console.error(error);
 				}
@@ -526,6 +595,8 @@
 				const durationHours = clamp(parseInt(scheduleDurationH.value) || 1, 1, 12);
 				const durationMin = durationHours * 60;
 				const enabled = scheduleEnabled.checked ? 1 : 0;
+
+				saveScheduleUiCache(enabled, daysMask, startMin, durationMin);
 
 				const msg = `set_schedule:${enabled}:${daysMask}:${startMin}:${durationMin}`;
 				if (websocket.readyState === WebSocket.OPEN) {
