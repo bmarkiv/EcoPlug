@@ -63,6 +63,8 @@ static Channel refill_ch{ "refill",   "Refill", PIN_REFILL_RELAY, &ws_refill };
 void sendChannelState(Channel &ch, unsigned long now);
 int64_t now_utc_sec();
 int find_char(const char *str, char c);
+bool schedules_overlap(const ScheduleConfig &a, const ScheduleConfig &b);
+void set_channel_output(Channel &ch, bool on);
 
 AsyncWebServer server(80);
 WiFiManager WiFiManager(server);
@@ -108,6 +110,68 @@ void setup_io() {
 void switch_state(bool on) {
     digitalWrite(PIN_RELAY, on ? HIGH : LOW);
     log("Switch state changed: %s", on ? "ON" : "OFF");
+}
+
+void set_channel_output(Channel &ch, bool on) {
+    if (&ch == &filter_ch) {
+        switch_state(on);
+        return;
+    }
+    digitalWrite(ch.pin, on ? HIGH : LOW);
+    log("%s state changed: %s", ch.label, on ? "ON" : "OFF");
+}
+
+bool minute_in_wrapped_range(int minute, int start, int end_exclusive) {
+    if (start < end_exclusive) return minute >= start && minute < end_exclusive;
+    return minute >= start || minute < end_exclusive;
+}
+
+bool schedule_active_at_minute(const ScheduleConfig &cfg, int week_minute) {
+    if (!cfg.enabled || cfg.days_mask == 0) return false;
+    for (int d = 0; d < 7; d++) {
+        if (((cfg.days_mask >> d) & 0x01) == 0) continue;
+        int start = d * 1440 + (int)cfg.start_minute;
+        int end_exclusive = start + (int)cfg.duration_min;
+        int m = week_minute;
+        if (end_exclusive <= 10080) {
+            if (m >= start && m < end_exclusive) return true;
+        } else {
+            int wrapped_end = end_exclusive - 10080;
+            if (minute_in_wrapped_range(m, start, wrapped_end)) return true;
+        }
+    }
+    return false;
+}
+
+bool schedules_overlap(const ScheduleConfig &a, const ScheduleConfig &b) {
+    if (!a.enabled || !b.enabled) return false;
+    for (int m = 0; m < 10080; m++) {
+        if (schedule_active_at_minute(a, m) && schedule_active_at_minute(b, m)) return true;
+    }
+    return false;
+}
+
+bool schedules_overlap_ignoring_enabled(const ScheduleConfig &a, const ScheduleConfig &b) {
+    ScheduleConfig aa = a;
+    ScheduleConfig bb = b;
+    aa.enabled = true;
+    bb.enabled = true;
+    return schedules_overlap(aa, bb);
+}
+
+ScheduleConfig load_channel_schedule_snapshot(const char *prefs_ns) {
+    ScheduleConfig cfg;
+    Preferences p;
+    p.begin(prefs_ns, true);
+    cfg.enabled      = p.getBool("enabled", false);
+    cfg.days_mask    = (uint8_t)p.getUChar("days", 0x00);
+    cfg.start_minute = (uint16_t)p.getUInt("start", 8 * 60);
+    cfg.duration_min = (uint16_t)p.getUInt("dur", 120);
+    p.end();
+    if (cfg.start_minute > 1439) cfg.start_minute = 0;
+    if (cfg.duration_min == 0)   cfg.duration_min = 1;
+    if (cfg.duration_min > 720)  cfg.duration_min = 720;
+    return cfg;
 }
 
 // -------------------- Schedule persistence --------------------
@@ -239,16 +303,23 @@ int find_char(const char *str, char c) {
 void handleChannelMessage(Channel &ch, char *msg) {
     int colon = find_char(msg, ':');
     if (colon < 0) { log("%s unsupported command: %s", ch.label, msg); return; }
+    Channel *other = (&ch == &filter_ch) ? &refill_ch : &filter_ch;
 
     if (strncmp(msg, "set_duration:", 13) == 0) {
         auto now = millis();
         const char *p = msg + colon + 1;
         ch.switch_off_time = 0;
-        digitalWrite(ch.pin, LOW);
+        set_channel_output(ch, false);
         if (p[0] >= '0' && p[0] <= '9') {
             long dur = atol(p);
             ch.switch_off_time = now + dur * 1000;
-            digitalWrite(ch.pin, dur > 0 ? HIGH : LOW);
+            if (dur > 0 && other->switch_off_time > now) {
+                other->switch_off_time = 0;
+                set_channel_output(*other, false);
+                sendChannelState(*other, now);
+                log("%s turned off because %s was turned on", other->label, ch.label);
+            }
+            set_channel_output(ch, dur > 0);
             log("%s duration_on: %ld", ch.label, dur);
         }
         sendChannelState(ch, now);
@@ -285,14 +356,26 @@ void handleChannelMessage(Channel &ch, char *msg) {
         memcpy(days_buf,    payload + c1 + 1, min((int)sizeof(days_buf)    - 1, c2 - c1 - 1));
         memcpy(start_buf,   payload + c2 + 1, min((int)sizeof(start_buf)   - 1, c3 - c2 - 1));
 
-        ch.cfg.enabled      = atoi(enabled_buf) != 0;
-        ch.cfg.days_mask    = (uint8_t)(atoi(days_buf) & 0x7F);
-        ch.cfg.start_minute = (uint16_t)max(0, min(1439, atoi(start_buf)));
-        ch.cfg.duration_min = (uint16_t)max(1, min(720,  atoi(payload + c3 + 1)));
+        ScheduleConfig proposed;
+        proposed.enabled      = atoi(enabled_buf) != 0;
+        proposed.days_mask    = (uint8_t)(atoi(days_buf) & 0x7F);
+        proposed.start_minute = (uint16_t)max(0, min(1439, atoi(start_buf)));
+        proposed.duration_min = (uint16_t)max(1, min(720,  atoi(payload + c3 + 1)));
+
+        ScheduleConfig other_persisted = load_channel_schedule_snapshot(other->prefs_ns);
+        if (schedules_overlap_ignoring_enabled(proposed, other_persisted)) {
+            log("%s schedule rejected: overlaps with %s schedule", ch.label, other->label);
+            ch.ws->textAll("notice:Schedule overlaps with other channel schedule");
+            sendChannelState(ch, millis());
+            return;
+        }
+
+        ch.cfg = proposed;
         ch.last_schedule_local_day = -1;
         save_channel_schedule(ch);
         log("%s schedule saved: enabled=%d days=%u start=%u duration=%u",
             ch.label, ch.cfg.enabled ? 1 : 0, ch.cfg.days_mask, ch.cfg.start_minute, ch.cfg.duration_min);
+        ch.ws->textAll("notice:Schedule saved");
         sendChannelState(ch, millis());
         return;
     }
@@ -319,9 +402,17 @@ void check_channel_schedule(Channel &ch, unsigned long now_ms) {
     if ((sec_of_day % 60) != 0) return;
     if (ch.last_schedule_local_day == local_day) return;
 
+    Channel *other = (&ch == &filter_ch) ? &refill_ch : &filter_ch;
+    if (other->switch_off_time > now_ms) {
+        other->switch_off_time = 0;
+        set_channel_output(*other, false);
+        sendChannelState(*other, now_ms);
+        log("%s turned off because %s schedule started", other->label, ch.label);
+    }
+
     ch.last_schedule_local_day = local_day;
     ch.switch_off_time = now_ms + (unsigned long)ch.cfg.duration_min * 60UL * 1000UL;
-    digitalWrite(ch.pin, HIGH);
+    set_channel_output(ch, true);
     log("%s schedule trigger: dow=%d start_min=%u duration_min=%u",
         ch.label, day_of_week, ch.cfg.start_minute, ch.cfg.duration_min);
     sendChannelState(ch, now_ms);
@@ -385,15 +476,21 @@ unsigned long change_state(const char *data) {
     auto now = millis();
     if (data[0] == 'f') return now;
     filter_ch.switch_off_time = 0;
-    switch_state(false);
+    set_channel_output(filter_ch, false);
     if (data[0] < '0' || data[0] > '9') {
         log("Invalid URL: '%s'", data);
         return now;
     }
     long duration_on = atol(data);
     filter_ch.switch_off_time = now + duration_on * 1000;
+    if (duration_on > 0 && refill_ch.switch_off_time > now) {
+        refill_ch.switch_off_time = 0;
+        set_channel_output(refill_ch, false);
+        sendChannelState(refill_ch, now);
+        log("%s turned off because %s was turned on", refill_ch.label, filter_ch.label);
+    }
     log("duration_on: %ld, switch_off_time: %ld", duration_on, filter_ch.switch_off_time - now);
-    switch_state(duration_on > 0);
+    set_channel_output(filter_ch, duration_on > 0);
     return now;
 }
 
@@ -427,6 +524,7 @@ void start_web_server() {
     server.reset();
     // /refill must not be cached so the browser sees its pathname and picks the right WS.
     server.on("/refill", HTTP_GET, [](AsyncWebServerRequest *r) { serve_index(r, "no-store"); });
+    server.on("/refill/", HTTP_GET, [](AsyncWebServerRequest *r) { serve_index(r, "no-store"); });
     server.on("/",       HTTP_GET, [](AsyncWebServerRequest *r) { serve_index(r, "max-age=86400"); });
     WiFiManager.registerResetWiFi();
     server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *req) {
@@ -487,7 +585,13 @@ void loop(void) {
         last_button_time = now;
         bool is_on = filter_ch.switch_off_time > 0;
         filter_ch.switch_off_time = is_on ? 0 : now + MAX_DURATION_ON;
-        switch_state(!is_on);
+        if (!is_on && refill_ch.switch_off_time > now) {
+            refill_ch.switch_off_time = 0;
+            set_channel_output(refill_ch, false);
+            sendChannelState(refill_ch, now);
+            log("%s turned off because %s was turned on", refill_ch.label, filter_ch.label);
+        }
+        set_channel_output(filter_ch, !is_on);
         sendChannelState(filter_ch, now);
         log("Button pressed — toggled switch");
     }
@@ -495,14 +599,14 @@ void loop(void) {
 
     if (filter_ch.switch_off_time && now > filter_ch.switch_off_time) {
         filter_ch.switch_off_time = 0;
-        switch_state(false);
+        set_channel_output(filter_ch, false);
         sendChannelState(filter_ch, now);
         log("Filter switched off due to timeout");
     }
 
     if (refill_ch.switch_off_time && now > refill_ch.switch_off_time) {
         refill_ch.switch_off_time = 0;
-        digitalWrite(PIN_REFILL_RELAY, LOW);
+        set_channel_output(refill_ch, false);
         sendChannelState(refill_ch, now);
         log("Refill switched off due to timeout");
     }

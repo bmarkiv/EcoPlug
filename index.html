@@ -20,6 +20,10 @@
 			box-sizing: border-box;
 		}
 
+		.panel.booting {
+			visibility: hidden;
+		}
+
 		@media (prefers-color-scheme: dark) {
 			body {
 				background-color: #111315;
@@ -131,6 +135,8 @@
 			align-items: center;
 			justify-content: center;
 			border-radius: 8px;
+			-webkit-tap-highlight-color: transparent;
+			appearance: none;
 		}
 
 		.icon-btn svg {
@@ -140,6 +146,14 @@
 
 		.icon-btn use {
 			fill: #14b8a6;
+		}
+
+		.icon-btn:hover,
+		.icon-btn:focus,
+		.icon-btn:active {
+			outline: none;
+			filter: none;
+			box-shadow: none;
 		}
 
 		.btn:disabled {
@@ -165,6 +179,7 @@
 			display: grid;
 			grid-template-columns: repeat(7, minmax(36px, 1fr));
 			gap: 6px;
+			min-height: 38px;
 		}
 
 		.day-btn {
@@ -211,6 +226,11 @@
 			border-radius: 28px;
 			background-color: #c7d2de;
 			transition: background-color 0.25s ease;
+		}
+
+		.slider-toggle.init .slider-track,
+		.slider-toggle.init .slider-track::before {
+			transition: none !important;
 		}
 
 		.slider-track::before {
@@ -270,9 +290,9 @@
 			<rect x="4" y="10.5" width="16" height="3" rx="1" />
 		</symbol>
 	</svg>
-	<div class="panel">
+	<div class="panel booting" id="app_panel">
 		<div class="header-row">
-			<h1>Filter Timer</h1>
+			<h1>Timer</h1>
 			<div class="status-inline">
 				<div class="subtle">Time left</div>
 				<div id="time_left" class="status">0:00:00</div>
@@ -286,7 +306,15 @@
 			</div>
 
 			<div class="subtle" style="margin-bottom: 6px;">Days</div>
-			<div class="day-grid" id="day_grid"></div>
+			<div class="day-grid" id="day_grid">
+				<button type="button" class="day-btn" data-day="0">Sun</button>
+				<button type="button" class="day-btn" data-day="1">Mon</button>
+				<button type="button" class="day-btn" data-day="2">Tue</button>
+				<button type="button" class="day-btn" data-day="3">Wed</button>
+				<button type="button" class="day-btn" data-day="4">Thu</button>
+				<button type="button" class="day-btn" data-day="5">Fri</button>
+				<button type="button" class="day-btn" data-day="6">Sat</button>
+			</div>
 
 			<div class="row" style="margin-top: 12px;">
 				<label for="schedule_start">Start</label>
@@ -297,7 +325,7 @@
 			</div>
 
 			<button class="primary" id="save_schedule" style="margin-top: 12px;">Save Schedule</button>
-			<div id="schedule_status" class="subtle" style="margin-top: 8px;"></div>
+			<div id="schedule_status" class="subtle" style="margin-top: 8px; min-height: 1.2em;"></div>
 		</div>
 
 		<div class="section">
@@ -312,7 +340,7 @@
 				</button>
 			</div>
 			<div class="switch-row" style="margin-top: 10px;">
-				<label class="slider-toggle">
+				<label class="slider-toggle init" id="run_now_wrap" style="visibility:hidden;">
 					<input type="checkbox" id="switch_on_off">
 					<span class="slider-track"></span>
 				</label>
@@ -328,11 +356,15 @@
 		</div>
 	</div>
 	<script>
-		window.addEventListener('load', function () {
-			const isRefill = window.location.pathname.startsWith('/refill');
+		(function () {
+			const pathname = window.location.pathname || '/';
+			const isRefill = pathname === '/refill' || pathname === '/refill/';
 			const WS_PATH = isRefill ? '/ws_refill' : '/ws';
 			const PAGE_TITLE = isRefill ? 'Refill Timer' : 'Filter Timer';
 			const SCHEDULE_STORAGE_KEY_VAL = isRefill ? 'ecoplug_refill_v1' : 'ecoplug_schedule_v1';
+			const MANUAL_HOURS_STORAGE_KEY = isRefill ? 'ecoplug_refill_manual_h_v1' : 'ecoplug_filter_manual_h_v1';
+			const REMAINING_TIME_STORAGE_KEY = isRefill ? 'ecoplug_refill_remaining_v1' : 'ecoplug_filter_remaining_v1';
+			const RUN_NOW_STATE_STORAGE_KEY = isRefill ? 'ecoplug_refill_run_now_v1' : 'ecoplug_filter_run_now_v1';
 			document.querySelector('h1').textContent = PAGE_TITLE;
 
 			const uptime = document.getElementById('uptime');
@@ -342,6 +374,8 @@
 			const plusH = document.getElementById('plus_h');
 			const minusH = document.getElementById('minus_h');
 			const switch_state = document.getElementById('switch_on_off');
+			const runNowWrap = document.getElementById('run_now_wrap');
+			const appPanel = document.getElementById('app_panel');
 			const scheduleEnabled = document.getElementById('schedule_enabled');
 			const scheduleStart = document.getElementById('schedule_start');
 			const scheduleDurationH = document.getElementById('schedule_duration_h');
@@ -351,17 +385,9 @@
 
 			const SCHEDULE_STORAGE_KEY = SCHEDULE_STORAGE_KEY_VAL;
 
-			const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-			const dayButtons = [];
-			dayNames.forEach((name, idx) => {
-				const btn = document.createElement('button');
-				btn.type = 'button';
-				btn.className = 'day-btn';
-				btn.textContent = name;
-				btn.dataset.day = String(idx);
+			const dayButtons = Array.from(dayGrid.querySelectorAll('.day-btn'));
+			dayButtons.forEach((btn) => {
 				btn.onclick = () => btn.classList.toggle('active');
-				dayGrid.appendChild(btn);
-				dayButtons.push(btn);
 			});
 
 			let uptime_sec = 0, remaining_time_sec = 0;
@@ -370,6 +396,61 @@
 			let uptime_timer = null;
 			const pad0 = (n) => String(Math.floor(n)).padStart(2, '0');
 			const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+
+			const loadManualHours = () => {
+				try {
+					const raw = localStorage.getItem(MANUAL_HOURS_STORAGE_KEY);
+					const parsed = parseInt(raw || '', 10);
+					if (Number.isFinite(parsed)) manual_hours = clamp(parsed, 1, 12);
+				} catch (error) {
+					console.warn('Failed to read manual duration cache', error);
+				}
+			};
+
+			const saveManualHours = () => {
+				try {
+					localStorage.setItem(MANUAL_HOURS_STORAGE_KEY, String(manual_hours));
+				} catch (error) {
+					console.warn('Failed to persist manual duration cache', error);
+				}
+			};
+
+			const loadRemainingTime = () => {
+				try {
+					const raw = localStorage.getItem(REMAINING_TIME_STORAGE_KEY);
+					const parsed = parseInt(raw || '', 10);
+					if (Number.isFinite(parsed) && parsed >= 0) remaining_time_sec = parsed;
+				} catch (error) {
+					console.warn('Failed to read remaining time cache', error);
+				}
+			};
+
+			const saveRemainingTime = () => {
+				try {
+					localStorage.setItem(REMAINING_TIME_STORAGE_KEY, String(Math.max(0, Math.floor(remaining_time_sec))));
+				} catch (error) {
+					console.warn('Failed to persist remaining time cache', error);
+				}
+			};
+
+			const loadRunNowState = () => {
+				try {
+					const raw = localStorage.getItem(RUN_NOW_STATE_STORAGE_KEY);
+					if (raw === '1') return true;
+					if (raw === '0') return false;
+				} catch (error) {
+					console.warn('Failed to read run state cache', error);
+				}
+				return null;
+			};
+
+			const saveRunNowState = (isOn) => {
+				try {
+					localStorage.setItem(RUN_NOW_STATE_STORAGE_KEY, isOn ? '1' : '0');
+				} catch (error) {
+					console.warn('Failed to persist run state cache', error);
+				}
+			};
 
 			const durationToClock = (total) => {
 				const sec = Math.max(0, Math.floor(total));
@@ -450,6 +531,10 @@
 			};
 
 			loadScheduleUiCache();
+			loadManualHours();
+			loadRemainingTime();
+			const cachedRunState = loadRunNowState();
+			switch_state.checked = cachedRunState === null ? (remaining_time_sec > 0) : cachedRunState;
 
 			const getDaysMask = () => {
 				let mask = 0;
@@ -497,7 +582,8 @@
 				}
 			};
 
-			const websocket = new WebSocket(`ws://${window.location.hostname}${WS_PATH}`);
+			const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+			const websocket = new WebSocket(`${wsProtocol}//${window.location.host}${WS_PATH}`);
 			window.websocket = websocket;
 
 			websocket.onopen = function () {
@@ -513,6 +599,11 @@
 
 			websocket.onmessage = function (event) {
 				try {
+					if (event.data.startsWith('notice:')) {
+						scheduleStatus.textContent = event.data.slice('notice:'.length);
+						return;
+					}
+
 					if (!event.data.startsWith("{")) {
 						const logMessage = event.data.replace("[log]:", "");
 						console.log(logMessage);
@@ -525,7 +616,9 @@
 					}
 
 					remaining_time_sec = parseInt(data['remaining_time']) || 0;
+					saveRemainingTime();
 					switch_state.checked = remaining_time_sec != 0;
+					saveRunNowState(switch_state.checked);
 					renderTimeLeft();
 					renderManual();
 
@@ -572,6 +665,7 @@
 
 			const websocket_send_msg = () => {
 				const targetSec = switch_state.checked ? manual_hours * 3600 : 0;
+				saveRunNowState(switch_state.checked);
 				const msg = 'set_duration:' + targetSec;
 				if (websocket.readyState === WebSocket.OPEN) {
 					console.log(`websocket.send: ${msg}`);
@@ -586,11 +680,13 @@
 
 			plusH.onclick = () => {
 				manual_hours = clamp(manual_hours + 1, 1, 12);
+				saveManualHours();
 				renderManual();
 			};
 
 			minusH.onclick = () => {
 				manual_hours = clamp(manual_hours - 1, 1, 12);
+				saveManualHours();
 				renderManual();
 			};
 
@@ -616,7 +712,14 @@
 			renderManual();
 			renderTimeLeft();
 			renderCurrentTime();
-		});
+			requestAnimationFrame(() => {
+				if (runNowWrap) {
+					runNowWrap.style.visibility = 'visible';
+					runNowWrap.classList.remove('init');
+				}
+				if (appPanel) appPanel.classList.remove('booting');
+			});
+		})();
 	</script>
 </body>
 
