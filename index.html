@@ -328,7 +328,7 @@
 			<div id="schedule_status" class="subtle" style="margin-top: 8px; min-height: 1.2em;"></div>
 		</div>
 
-		<div class="section">
+		<div class="section" id="manual_section">
 			<h2>Manual Run</h2>
 			<div class="row">
 				<button class="btn secondary icon-btn" id="minus_h" aria-label="Decrease hours">
@@ -361,10 +361,6 @@
 			const isRefill = pathname === '/refill' || pathname === '/refill/';
 			const WS_PATH = isRefill ? '/ws_refill' : '/ws';
 			const PAGE_TITLE = isRefill ? 'Refill Timer' : 'Filter Timer';
-			const SCHEDULE_STORAGE_KEY_VAL = isRefill ? 'ecoplug_refill_v1' : 'ecoplug_schedule_v1';
-			const MANUAL_HOURS_STORAGE_KEY = isRefill ? 'ecoplug_refill_manual_h_v1' : 'ecoplug_filter_manual_h_v1';
-			const REMAINING_TIME_STORAGE_KEY = isRefill ? 'ecoplug_refill_remaining_v1' : 'ecoplug_filter_remaining_v1';
-			const RUN_NOW_STATE_STORAGE_KEY = isRefill ? 'ecoplug_refill_run_now_v1' : 'ecoplug_filter_run_now_v1';
 			document.querySelector('h1').textContent = PAGE_TITLE;
 
 			const uptime = document.getElementById('uptime');
@@ -376,14 +372,13 @@
 			const switch_state = document.getElementById('switch_on_off');
 			const runNowWrap = document.getElementById('run_now_wrap');
 			const appPanel = document.getElementById('app_panel');
+			const manualSection = document.getElementById('manual_section');
 			const scheduleEnabled = document.getElementById('schedule_enabled');
 			const scheduleStart = document.getElementById('schedule_start');
 			const scheduleDurationH = document.getElementById('schedule_duration_h');
 			const saveSchedule = document.getElementById('save_schedule');
 			const scheduleStatus = document.getElementById('schedule_status');
 			const dayGrid = document.getElementById('day_grid');
-
-			const SCHEDULE_STORAGE_KEY = SCHEDULE_STORAGE_KEY_VAL;
 
 			const dayButtons = Array.from(dayGrid.querySelectorAll('.day-btn'));
 			dayButtons.forEach((btn) => {
@@ -394,62 +389,17 @@
 			let local_epoch_sec = Math.floor(Date.now() / 1000) - (new Date().getTimezoneOffset() * 60);
 			let manual_hours = 5;
 			let uptime_timer = null;
+			let ui_ready = false;
+			let pending_manual_duration_sec = null;
 			const pad0 = (n) => String(Math.floor(n)).padStart(2, '0');
 			const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 
-			const loadManualHours = () => {
-				try {
-					const raw = localStorage.getItem(MANUAL_HOURS_STORAGE_KEY);
-					const parsed = parseInt(raw || '', 10);
-					if (Number.isFinite(parsed)) manual_hours = clamp(parsed, 1, 12);
-				} catch (error) {
-					console.warn('Failed to read manual duration cache', error);
-				}
-			};
-
-			const saveManualHours = () => {
-				try {
-					localStorage.setItem(MANUAL_HOURS_STORAGE_KEY, String(manual_hours));
-				} catch (error) {
-					console.warn('Failed to persist manual duration cache', error);
-				}
-			};
-
-			const loadRemainingTime = () => {
-				try {
-					const raw = localStorage.getItem(REMAINING_TIME_STORAGE_KEY);
-					const parsed = parseInt(raw || '', 10);
-					if (Number.isFinite(parsed) && parsed >= 0) remaining_time_sec = parsed;
-				} catch (error) {
-					console.warn('Failed to read remaining time cache', error);
-				}
-			};
-
-			const saveRemainingTime = () => {
-				try {
-					localStorage.setItem(REMAINING_TIME_STORAGE_KEY, String(Math.max(0, Math.floor(remaining_time_sec))));
-				} catch (error) {
-					console.warn('Failed to persist remaining time cache', error);
-				}
-			};
-
-			const loadRunNowState = () => {
-				try {
-					const raw = localStorage.getItem(RUN_NOW_STATE_STORAGE_KEY);
-					if (raw === '1') return true;
-					if (raw === '0') return false;
-				} catch (error) {
-					console.warn('Failed to read run state cache', error);
-				}
-				return null;
-			};
-
-			const saveRunNowState = (isOn) => {
-				try {
-					localStorage.setItem(RUN_NOW_STATE_STORAGE_KEY, isOn ? '1' : '0');
-				} catch (error) {
-					console.warn('Failed to persist run state cache', error);
-				}
+			const applyManualDurationFromState = (seconds) => {
+				const parsed = parseInt(seconds, 10);
+				if (!Number.isFinite(parsed) || parsed <= 0) return;
+				manual_hours = clamp(Math.round(parsed / 3600), 1, 12);
+				pending_manual_duration_sec = null;
+				renderManual();
 			};
 
 			const durationToClock = (total) => {
@@ -461,7 +411,7 @@
 			};
 
 			const renderManual = () => {
-				h.textContent = String(manual_hours);
+				h.textContent = ui_ready ? String(manual_hours) : '--';
 				const disabled = switch_state.checked;
 				plusH.disabled = disabled;
 				minusH.disabled = disabled;
@@ -492,49 +442,20 @@
 				return Number.isFinite(n) ? n : null;
 			};
 
-			const loadScheduleUiCache = () => {
-				try {
-					const raw = localStorage.getItem(SCHEDULE_STORAGE_KEY);
-					if (!raw) return;
-					const cached = JSON.parse(raw);
-					if (cached && Number.isFinite(cached.daysMask)) {
-						setDaysFromMask(cached.daysMask & 0x7F);
-					}
-					if (cached && Number.isFinite(cached.enabled)) {
-						scheduleEnabled.checked = cached.enabled === 1;
-					}
-					if (cached && Number.isFinite(cached.startMin)) {
-						const hh = Math.floor(cached.startMin / 60);
-						const mm = cached.startMin % 60;
-						scheduleStart.value = `${pad0(hh)}:${pad0(mm)}`;
-					}
-					if (cached && Number.isFinite(cached.durationMin)) {
-						scheduleDurationH.value = String(clamp(Math.round(cached.durationMin / 60), 1, 12));
-					}
-				} catch (error) {
-					console.warn('Failed to read schedule cache', error);
+			const applyBackendState = (data) => {
+				if (Object.prototype.hasOwnProperty.call(data, 'manual_duration_sec')) {
+					applyManualDurationFromState(data['manual_duration_sec']);
 				}
-			};
-
-			const saveScheduleUiCache = (enabled, daysMask, startMin, durationMin) => {
-				try {
-					const payload = {
-						enabled,
-						daysMask,
-						startMin,
-						durationMin
-					};
-					localStorage.setItem(SCHEDULE_STORAGE_KEY, JSON.stringify(payload));
-				} catch (error) {
-					console.warn('Failed to persist schedule cache', error);
+				if (!ui_ready) {
+					ui_ready = true;
+					if (runNowWrap) {
+						runNowWrap.style.visibility = 'visible';
+						runNowWrap.classList.remove('init');
+					}
+					if (appPanel) appPanel.classList.remove('booting');
 				}
+				renderManual();
 			};
-
-			loadScheduleUiCache();
-			loadManualHours();
-			loadRemainingTime();
-			const cachedRunState = loadRunNowState();
-			switch_state.checked = cachedRunState === null ? (remaining_time_sec > 0) : cachedRunState;
 
 			const getDaysMask = () => {
 				let mask = 0;
@@ -586,10 +507,24 @@
 			const websocket = new WebSocket(`${wsProtocol}//${window.location.host}${WS_PATH}`);
 			window.websocket = websocket;
 
+			const sendManualDurationToBackend = (seconds) => {
+				const msg = 'set_manual_duration:' + seconds;
+				if (websocket.readyState === WebSocket.OPEN) {
+					websocket.send(msg);
+					return;
+				}
+				pending_manual_duration_sec = seconds;
+			};
+
 			websocket.onopen = function () {
 				console.log('WebSocket connected');
 				start_uptime_timer();
+				websocket.send('get_state:1');
 				sendTimeSync();
+				if (pending_manual_duration_sec !== null) {
+					websocket.send('set_manual_duration:' + pending_manual_duration_sec);
+					pending_manual_duration_sec = null;
+				}
 			};
 
 			websocket.onclose = function () {
@@ -616,11 +551,10 @@
 					}
 
 					remaining_time_sec = parseInt(data['remaining_time']) || 0;
-					saveRemainingTime();
 					switch_state.checked = remaining_time_sec != 0;
-					saveRunNowState(switch_state.checked);
 					renderTimeLeft();
 					renderManual();
+					applyBackendState(data);
 
 					const hasScheduleFields =
 						Object.prototype.hasOwnProperty.call(data, 'schedule_enabled') &&
@@ -644,13 +578,6 @@
 						if (durationMin !== null) {
 							scheduleDurationH.value = String(clamp(Math.round(durationMin / 60), 1, 12));
 						}
-
-						saveScheduleUiCache(
-							enabledNum !== null ? (enabledNum === 1 ? 1 : 0) : (scheduleEnabled.checked ? 1 : 0),
-							scheduleDays !== null ? (scheduleDays & 0x7F) : getDaysMask(),
-							startMin !== null ? startMin : ((toIntOrNull(scheduleStart.value.split(':')[0]) || 0) * 60 + (toIntOrNull(scheduleStart.value.split(':')[1]) || 0)),
-							durationMin !== null ? durationMin : (clamp(parseInt(scheduleDurationH.value, 10) || 1, 1, 12) * 60)
-						);
 					}
 
 					const localEpoch = toIntOrNull(data['local_epoch']);
@@ -665,7 +592,6 @@
 
 			const websocket_send_msg = () => {
 				const targetSec = switch_state.checked ? manual_hours * 3600 : 0;
-				saveRunNowState(switch_state.checked);
 				const msg = 'set_duration:' + targetSec;
 				if (websocket.readyState === WebSocket.OPEN) {
 					console.log(`websocket.send: ${msg}`);
@@ -680,14 +606,14 @@
 
 			plusH.onclick = () => {
 				manual_hours = clamp(manual_hours + 1, 1, 12);
-				saveManualHours();
 				renderManual();
+				sendManualDurationToBackend(manual_hours * 3600);
 			};
 
 			minusH.onclick = () => {
 				manual_hours = clamp(manual_hours - 1, 1, 12);
-				saveManualHours();
 				renderManual();
+				sendManualDurationToBackend(manual_hours * 3600);
 			};
 
 			saveSchedule.onclick = () => {
@@ -697,8 +623,6 @@
 				const durationHours = clamp(parseInt(scheduleDurationH.value) || 1, 1, 12);
 				const durationMin = durationHours * 60;
 				const enabled = scheduleEnabled.checked ? 1 : 0;
-
-				saveScheduleUiCache(enabled, daysMask, startMin, durationMin);
 
 				const msg = `set_schedule:${enabled}:${daysMask}:${startMin}:${durationMin}`;
 				if (websocket.readyState === WebSocket.OPEN) {

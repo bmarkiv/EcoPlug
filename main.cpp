@@ -45,6 +45,7 @@ struct Channel {
     AsyncWebSocket *ws;
 
     ScheduleConfig cfg;
+    uint32_t manual_duration_sec = MAX_DURATION_ON / 1000;
     unsigned long switch_off_time = 0;
     long last_schedule_local_day = -1;
     long last_schedule_checked_sec = -1;
@@ -182,10 +183,13 @@ void load_channel_schedule(Channel &ch) {
     ch.cfg.days_mask    = (uint8_t)p.getUChar("days", 0x00);
     ch.cfg.start_minute = (uint16_t)p.getUInt("start", 8 * 60);
     ch.cfg.duration_min = (uint16_t)p.getUInt("dur", 120);
+    ch.manual_duration_sec = p.getUInt("manual_dur", MAX_DURATION_ON / 1000);
     p.end();
     if (ch.cfg.start_minute > 1439) ch.cfg.start_minute = 0;
     if (ch.cfg.duration_min == 0)   ch.cfg.duration_min = 1;
     if (ch.cfg.duration_min > 720)  ch.cfg.duration_min = 720;
+    if (ch.manual_duration_sec == 0) ch.manual_duration_sec = MAX_DURATION_ON / 1000;
+    if (ch.manual_duration_sec > 12 * 3600) ch.manual_duration_sec = 12 * 3600;
 }
 
 void save_channel_schedule(Channel &ch) {
@@ -195,6 +199,7 @@ void save_channel_schedule(Channel &ch) {
     p.putUChar("days",   ch.cfg.days_mask);
     p.putUInt("start",   ch.cfg.start_minute);
     p.putUInt("dur",     ch.cfg.duration_min);
+    p.putUInt("manual_dur", ch.manual_duration_sec);
     p.end();
 }
 
@@ -270,28 +275,30 @@ int64_t now_local_sec() {
 }
 
 // -------------------- Channel helpers --------------------
+static void buildStateJson(Channel &ch, unsigned long now) {
+    auto local_sec = now_local_sec();
+    ws_msg  = "{";
+    ws_msg += "\"remaining_time\":\""     + String((ch.switch_off_time > now) ? (ch.switch_off_time - now) / 1000 : 0) + "\"";
+    ws_msg += ",\"manual_duration_sec\":\"" + String(ch.manual_duration_sec)  + "\"";
+    ws_msg += ",\"uptime\":\""            + String(now / 1000)                + "\"";
+    ws_msg += ",\"schedule_enabled\":\""  + String(ch.cfg.enabled ? 1 : 0)    + "\"";
+    ws_msg += ",\"schedule_days\":\""     + String(ch.cfg.days_mask)           + "\"";
+    ws_msg += ",\"schedule_start\":\""    + String(ch.cfg.start_minute)        + "\"";
+    ws_msg += ",\"schedule_duration\":\"" + String(ch.cfg.duration_min)        + "\"";
+    ws_msg += ",\"time_synced\":\""       + String(utc_synced ? 1 : 0)         + "\"";
+    ws_msg += ",\"tz_offset_min\":\""     + String(tz_offset_min)              + "\"";
+    ws_msg += ",\"local_epoch\":\""       + String(local_sec)                  + "\"";
+    ws_msg += "}";
+}
+
+void sendChannelStateToClient(Channel &ch, AsyncWebSocketClient *client, unsigned long now) {
+    buildStateJson(ch, now);
+    client->text(ws_msg);
+}
+
 void sendChannelState(Channel &ch, unsigned long now) {
     if (!ch.ws->count()) return;
-    auto local_sec = now_local_sec();
-    ws_msg = R"({"remaining_time":")";
-    ws_msg += String((ch.switch_off_time > now) ? (ch.switch_off_time - now) / 1000 : 0);
-    ws_msg += R"(","uptime":")";
-    ws_msg += String(now / 1000);
-    ws_msg += R"(","schedule_enabled":")";
-    ws_msg += String(ch.cfg.enabled ? 1 : 0);
-    ws_msg += R"(","schedule_days":")";
-    ws_msg += String(ch.cfg.days_mask);
-    ws_msg += R"(","schedule_start":")";
-    ws_msg += String(ch.cfg.start_minute);
-    ws_msg += R"(","schedule_duration":")";
-    ws_msg += String(ch.cfg.duration_min);
-    ws_msg += R"(","time_synced":")";
-    ws_msg += String(utc_synced ? 1 : 0);
-    ws_msg += R"(","tz_offset_min":")";
-    ws_msg += String(tz_offset_min);
-    ws_msg += R"(","local_epoch":")";
-    ws_msg += String(local_sec);
-    ws_msg += R"("})";
+    buildStateJson(ch, now);
     ch.ws->textAll(ws_msg);
 }
 
@@ -312,6 +319,10 @@ void handleChannelMessage(Channel &ch, char *msg) {
         set_channel_output(ch, false);
         if (p[0] >= '0' && p[0] <= '9') {
             long dur = atol(p);
+            if (dur > 0) {
+                ch.manual_duration_sec = (uint32_t)min(12L * 3600L, dur);
+                save_channel_schedule(ch);
+            }
             ch.switch_off_time = now + dur * 1000;
             if (dur > 0 && other->switch_off_time > now) {
                 other->switch_off_time = 0;
@@ -323,6 +334,22 @@ void handleChannelMessage(Channel &ch, char *msg) {
             log("%s duration_on: %ld", ch.label, dur);
         }
         sendChannelState(ch, now);
+        return;
+    }
+
+    if (strncmp(msg, "set_manual_duration:", 20) == 0) {
+        const char *payload = msg + 20;
+        long dur = atol(payload);
+        if (dur <= 0) dur = MAX_DURATION_ON / 1000;
+        ch.manual_duration_sec = (uint32_t)min(12L * 3600L, dur);
+        save_channel_schedule(ch);
+        log("%s manual duration saved: %lu", ch.label, (unsigned long)ch.manual_duration_sec);
+        sendChannelState(ch, millis());
+        return;
+    }
+
+    if (strncmp(msg, "get_state:", 10) == 0) {
+        sendChannelState(ch, millis());
         return;
     }
 
@@ -441,7 +468,7 @@ void onFilterEvent(AsyncWebSocket *srv, AsyncWebSocketClient *client,
                    AwsEventType type, void *arg, uint8_t *data, size_t len) {
     switch (type) {
         case WS_EVT_CONNECT:
-            sendChannelState(filter_ch, millis());
+            sendChannelStateToClient(filter_ch, client, millis());
             log("%s WS #%u connected from %s", filter_ch.label, client->id(), client->remoteIP().toString().c_str());
             break;
         case WS_EVT_DISCONNECT:
@@ -458,7 +485,7 @@ void onRefillEvent(AsyncWebSocket *srv, AsyncWebSocketClient *client,
                    AwsEventType type, void *arg, uint8_t *data, size_t len) {
     switch (type) {
         case WS_EVT_CONNECT:
-            sendChannelState(refill_ch, millis());
+            sendChannelStateToClient(refill_ch, client, millis());
             log("%s WS #%u connected from %s", refill_ch.label, client->id(), client->remoteIP().toString().c_str());
             break;
         case WS_EVT_DISCONNECT:
