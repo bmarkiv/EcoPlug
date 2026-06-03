@@ -320,8 +320,10 @@
 				<label for="schedule_start">Start</label>
 				<input class="input" type="time" id="schedule_start" value="08:00">
 				<label for="schedule_duration_h">Duration</label>
-				<input class="input" type="number" id="schedule_duration_h" min="1" max="12" step="1" value="2">
-				<span>hours</span>
+				<input class="input" type="number" id="schedule_duration_h" min="0" max="12" step="1" value="2" style="width: 72px;">
+				<span>h</span>
+				<input class="input" type="number" id="schedule_duration_m" min="0" max="59" step="1" value="0" style="width: 72px;">
+				<span>m</span>
 			</div>
 
 			<button class="primary" id="save_schedule" style="margin-top: 12px;">Save Schedule</button>
@@ -330,14 +332,12 @@
 
 		<div class="section" id="manual_section">
 			<h2>Manual Run</h2>
-			<div class="row">
-				<button class="btn secondary icon-btn" id="minus_h" aria-label="Decrease hours">
-					<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-minus"></use></svg>
-				</button>
-				<div class="hours-display"><span id="duration_h">5</span>h</div>
-				<button class="btn secondary icon-btn" id="plus_h" aria-label="Increase hours">
-					<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-plus"></use></svg>
-				</button>
+			<div class="row" style="margin-top: 8px; gap: 6px; align-items: center;">
+				<label for="manual_duration_h">Duration</label>
+				<input class="input" type="number" id="manual_duration_h" min="0" max="12" step="1" value="5" style="width: 72px;">
+				<span>h</span>
+				<input class="input" type="number" id="manual_duration_m" min="0" max="59" step="1" value="0" style="width: 72px;">
+				<span>m</span>
 			</div>
 			<div class="switch-row" style="margin-top: 10px;">
 				<label class="slider-toggle init" id="run_now_wrap" style="visibility:hidden;">
@@ -365,10 +365,9 @@
 
 			const uptime = document.getElementById('uptime');
 			const currentTime = document.getElementById('current_time');
-			const h = document.getElementById('duration_h');
+			const manualDurationH = document.getElementById('manual_duration_h');
+			const manualDurationM = document.getElementById('manual_duration_m');
 			const timeLeft = document.getElementById('time_left');
-			const plusH = document.getElementById('plus_h');
-			const minusH = document.getElementById('minus_h');
 			const switch_state = document.getElementById('switch_on_off');
 			const runNowWrap = document.getElementById('run_now_wrap');
 			const appPanel = document.getElementById('app_panel');
@@ -376,6 +375,7 @@
 			const scheduleEnabled = document.getElementById('schedule_enabled');
 			const scheduleStart = document.getElementById('schedule_start');
 			const scheduleDurationH = document.getElementById('schedule_duration_h');
+			const scheduleDurationM = document.getElementById('schedule_duration_m');
 			const saveSchedule = document.getElementById('save_schedule');
 			const scheduleStatus = document.getElementById('schedule_status');
 			const dayGrid = document.getElementById('day_grid');
@@ -387,7 +387,7 @@
 
 			let uptime_sec = 0, remaining_time_sec = 0;
 			let local_epoch_sec = Math.floor(Date.now() / 1000) - (new Date().getTimezoneOffset() * 60);
-			let manual_hours = 5;
+			let manual_duration_sec = 5 * 3600;
 			let uptime_timer = null;
 			let ui_ready = false;
 			let pending_manual_duration_sec = null;
@@ -397,9 +397,27 @@
 			const applyManualDurationFromState = (seconds) => {
 				const parsed = parseInt(seconds, 10);
 				if (!Number.isFinite(parsed) || parsed <= 0) return;
-				manual_hours = clamp(Math.round(parsed / 3600), 1, 12);
+				manual_duration_sec = clamp(parsed, 1, 12 * 3600);
 				pending_manual_duration_sec = null;
 				renderManual();
+			};
+
+			const setManualDurationInputs = (totalSeconds) => {
+				const seconds = Math.max(0, Math.floor(totalSeconds));
+				manualDurationH.value = String(Math.floor(seconds / 3600));
+				manualDurationM.value = String(Math.floor(seconds / 60) % 60);
+			};
+
+			const getManualDurationSeconds = () => {
+				const hours = clamp(parseInt(manualDurationH.value) || 0, 0, 12);
+				const minutes = clamp(parseInt(manualDurationM.value) || 0, 0, 59);
+				return clamp(hours * 3600 + minutes * 60, 1, 12 * 3600);
+			};
+
+			const setScheduleDurationInputs = (totalMinutes) => {
+				const minutes = Math.max(0, Math.floor(totalMinutes));
+				scheduleDurationH.value = String(Math.floor(minutes / 60));
+				scheduleDurationM.value = String(minutes % 60);
 			};
 
 			const durationToClock = (total) => {
@@ -411,10 +429,11 @@
 			};
 
 			const renderManual = () => {
-				h.textContent = ui_ready ? String(manual_hours) : '--';
-				const disabled = switch_state.checked;
-				plusH.disabled = disabled;
-				minusH.disabled = disabled;
+				if (ui_ready) {
+					setManualDurationInputs(manual_duration_sec);
+				}
+				manualDurationH.disabled = switch_state.checked;
+				manualDurationM.disabled = switch_state.checked;
 			};
 
 			const renderTimeLeft = () => {
@@ -576,7 +595,7 @@
 							scheduleStart.value = `${pad0(hh)}:${pad0(mm)}`;
 						}
 						if (durationMin !== null) {
-							scheduleDurationH.value = String(clamp(Math.round(durationMin / 60), 1, 12));
+							setScheduleDurationInputs(durationMin);
 						}
 					}
 
@@ -591,7 +610,7 @@
 			};
 
 			const websocket_send_msg = () => {
-				const targetSec = switch_state.checked ? manual_hours * 3600 : 0;
+				const targetSec = switch_state.checked ? getManualDurationSeconds() : 0;
 				const msg = 'set_duration:' + targetSec;
 				if (websocket.readyState === WebSocket.OPEN) {
 					console.log(`websocket.send: ${msg}`);
@@ -604,24 +623,25 @@
 
 			document.getElementById('switch_on_off').onclick = websocket_send_msg;
 
-			plusH.onclick = () => {
-				manual_hours = clamp(manual_hours + 1, 1, 12);
+			manualDurationH.onchange = () => {
+				manual_duration_sec = getManualDurationSeconds();
 				renderManual();
-				sendManualDurationToBackend(manual_hours * 3600);
+				sendManualDurationToBackend(manual_duration_sec);
 			};
 
-			minusH.onclick = () => {
-				manual_hours = clamp(manual_hours - 1, 1, 12);
+			manualDurationM.onchange = () => {
+				manual_duration_sec = getManualDurationSeconds();
 				renderManual();
-				sendManualDurationToBackend(manual_hours * 3600);
+				sendManualDurationToBackend(manual_duration_sec);
 			};
 
 			saveSchedule.onclick = () => {
 				const daysMask = getDaysMask();
 				const timeParts = (scheduleStart.value || '08:00').split(':');
 				const startMin = (parseInt(timeParts[0]) || 0) * 60 + (parseInt(timeParts[1]) || 0);
-				const durationHours = clamp(parseInt(scheduleDurationH.value) || 1, 1, 12);
-				const durationMin = durationHours * 60;
+				const durationHours = clamp(parseInt(scheduleDurationH.value) || 0, 0, 12);
+				const durationMinutes = clamp(parseInt(scheduleDurationM.value) || 0, 0, 59);
+				const durationMin = durationHours * 60 + durationMinutes;
 				const enabled = scheduleEnabled.checked ? 1 : 0;
 
 				const msg = `set_schedule:${enabled}:${daysMask}:${startMin}:${durationMin}`;

@@ -20,6 +20,7 @@ def compress_html(html_path: Path, header_path: Path, array_name: str, len_name:
         f.write(f"{byte_list}\n}};\n")
         f.write(f"const uint32_t {len_name} = {len(gz_data)};\n")
         f.write(f'const char {etag_name}[] = {etag};\n')
+        f.write(f"// Generated: {date_time_macro}")
 
     print(f"Header regenerated: {header_path.name}, date: {date_time_macro}")
 
