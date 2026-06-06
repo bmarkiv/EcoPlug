@@ -105,6 +105,68 @@
 			flex-wrap: wrap;
 		}
 
+        .stepper-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .stepper-group {
+            display: inline-flex;
+            align-items: center;
+            border: 1px solid rgba(127, 127, 127, 0.35);
+            border-radius: 12px;
+            overflow: hidden;
+            background: rgba(127, 127, 127, 0.08);
+        }
+
+        .stepper-btn {
+            min-width: 44px;
+            min-height: 44px;
+            padding: 0 12px;
+            border: 0;
+            background: transparent;
+            color: inherit;
+            -webkit-appearance: none;
+            appearance: none;
+            font-family: inherit;
+            font-size: 1.2rem;
+            font-weight: 700;
+            line-height: 1;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .stepper-btn:focus,
+        .stepper-btn:active {
+            outline: none;
+            box-shadow: none;
+        }
+
+        .stepper-value {
+            min-width: 52px;
+            min-height: 44px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 10px;
+            font-size: 1rem;
+            font-weight: 700;
+            text-align: center;
+            box-sizing: border-box;
+        }
+
+        .stepper-unit {
+            min-width: 16px;
+            font-weight: 700;
+        }
+
+        .stepper-btn:disabled {
+            opacity: 0.45;
+            cursor: default;
+        }
+
 		.header-row {
 			display: flex;
 			justify-content: space-between;
@@ -265,11 +327,13 @@
 
 		@media (max-width: 520px) {
 			.header-row {
-				flex-direction: column;
 				align-items: flex-start;
+				flex-wrap: nowrap;
 			}
 
 			.status-inline {
+				margin-left: auto;
+				min-width: 0;
 				text-align: left;
 			}
 		}
@@ -294,7 +358,7 @@
 		<div class="header-row">
 			<h1>Timer</h1>
 			<div class="status-inline">
-				<div class="subtle">Time left</div>
+					<div class="subtle" id="connection_state">Time left</div>
 				<div id="time_left" class="status">0:00:00</div>
 			</div>
 		</div>
@@ -319,11 +383,24 @@
 			<div class="row" style="margin-top: 12px;">
 				<label for="schedule_start">Start</label>
 				<input class="input" type="time" id="schedule_start" value="08:00">
-				<label for="schedule_duration_h">Duration</label>
-				<input class="input" type="number" id="schedule_duration_h" min="0" max="12" step="1" value="2" style="width: 72px;">
-				<span>h</span>
-				<input class="input" type="number" id="schedule_duration_m" min="0" max="59" step="1" value="0" style="width: 72px;">
-				<span>m</span>
+			</div>
+
+			<div class="row" style="margin-top: 12px;">
+				<label for="schedule_duration_h_value">Duration</label>
+				<div class="stepper-row">
+					<div class="stepper-group" aria-label="Schedule hours">
+						<button type="button" class="stepper-btn" id="schedule_duration_h_down" aria-label="Decrease schedule hours">-</button>
+						<div class="stepper-value" id="schedule_duration_h_value">2</div>
+						<button type="button" class="stepper-btn" id="schedule_duration_h_up" aria-label="Increase schedule hours">+</button>
+						<span class="stepper-unit">h</span>
+					</div>
+					<div class="stepper-group" aria-label="Schedule minutes">
+						<button type="button" class="stepper-btn" id="schedule_duration_m_down" aria-label="Decrease schedule minutes">-</button>
+						<div class="stepper-value" id="schedule_duration_m_value">0</div>
+						<button type="button" class="stepper-btn" id="schedule_duration_m_up" aria-label="Increase schedule minutes">+</button>
+						<span class="stepper-unit">m</span>
+					</div>
+				</div>
 			</div>
 
 			<button class="primary" id="save_schedule" style="margin-top: 12px;">Save Schedule</button>
@@ -331,20 +408,32 @@
 		</div>
 
 		<div class="section" id="manual_section">
-			<h2>Manual Run</h2>
-			<div class="row" style="margin-top: 8px; gap: 6px; align-items: center;">
-				<label for="manual_duration_h">Duration</label>
-				<input class="input" type="number" id="manual_duration_h" min="0" max="12" step="1" value="5" style="width: 72px;">
-				<span>h</span>
-				<input class="input" type="number" id="manual_duration_m" min="0" max="59" step="1" value="0" style="width: 72px;">
-				<span>m</span>
+			<div class="header-row" style="align-items: center; margin-bottom: 10px;">
+				<h2 style="margin: 0;">Manual Run</h2>
+				<div class="switch-row">
+					<label class="slider-toggle init" id="run_now_wrap" style="visibility:hidden;">
+						<input type="checkbox" id="switch_on_off">
+						<span class="slider-track"></span>
+					</label>
+					<label for="switch_on_off">Run now</label>
+				</div>
 			</div>
-			<div class="switch-row" style="margin-top: 10px;">
-				<label class="slider-toggle init" id="run_now_wrap" style="visibility:hidden;">
-					<input type="checkbox" id="switch_on_off">
-					<span class="slider-track"></span>
-				</label>
-				<label for="switch_on_off">Run now</label>
+			<div class="row" style="margin-top: 8px; gap: 6px; align-items: center;">
+				<label for="manual_duration_h_value">Duration</label>
+				<div class="stepper-row">
+					<div class="stepper-group" aria-label="Manual hours">
+						<button type="button" class="stepper-btn" id="manual_duration_h_down" aria-label="Decrease manual hours">-</button>
+						<div class="stepper-value" id="manual_duration_h_value">5</div>
+						<button type="button" class="stepper-btn" id="manual_duration_h_up" aria-label="Increase manual hours">+</button>
+						<span class="stepper-unit">h</span>
+					</div>
+					<div class="stepper-group" aria-label="Manual minutes">
+						<button type="button" class="stepper-btn" id="manual_duration_m_down" aria-label="Decrease manual minutes">-</button>
+						<div class="stepper-value" id="manual_duration_m_value">0</div>
+						<button type="button" class="stepper-btn" id="manual_duration_m_up" aria-label="Increase manual minutes">+</button>
+						<span class="stepper-unit">m</span>
+					</div>
+				</div>
 			</div>
 		</div>
 
@@ -365,8 +454,13 @@
 
 			const uptime = document.getElementById('uptime');
 			const currentTime = document.getElementById('current_time');
-			const manualDurationH = document.getElementById('manual_duration_h');
-			const manualDurationM = document.getElementById('manual_duration_m');
+			const connectionState = document.getElementById('connection_state');
+			const manualDurationHValue = document.getElementById('manual_duration_h_value');
+			const manualDurationMValue = document.getElementById('manual_duration_m_value');
+			const manualDurationHDown = document.getElementById('manual_duration_h_down');
+			const manualDurationHUp = document.getElementById('manual_duration_h_up');
+			const manualDurationMDown = document.getElementById('manual_duration_m_down');
+			const manualDurationMUp = document.getElementById('manual_duration_m_up');
 			const timeLeft = document.getElementById('time_left');
 			const switch_state = document.getElementById('switch_on_off');
 			const runNowWrap = document.getElementById('run_now_wrap');
@@ -374,8 +468,12 @@
 			const manualSection = document.getElementById('manual_section');
 			const scheduleEnabled = document.getElementById('schedule_enabled');
 			const scheduleStart = document.getElementById('schedule_start');
-			const scheduleDurationH = document.getElementById('schedule_duration_h');
-			const scheduleDurationM = document.getElementById('schedule_duration_m');
+			const scheduleDurationHValue = document.getElementById('schedule_duration_h_value');
+			const scheduleDurationMValue = document.getElementById('schedule_duration_m_value');
+			const scheduleDurationHDown = document.getElementById('schedule_duration_h_down');
+			const scheduleDurationHUp = document.getElementById('schedule_duration_h_up');
+			const scheduleDurationMDown = document.getElementById('schedule_duration_m_down');
+			const scheduleDurationMUp = document.getElementById('schedule_duration_m_up');
 			const saveSchedule = document.getElementById('save_schedule');
 			const scheduleStatus = document.getElementById('schedule_status');
 			const dayGrid = document.getElementById('day_grid');
@@ -389,6 +487,10 @@
 			let local_epoch_sec = Math.floor(Date.now() / 1000) - (new Date().getTimezoneOffset() * 60);
 			let manual_duration_sec = 5 * 3600;
 			let uptime_timer = null;
+			let websocket_watchdog_timer = null;
+			let reconnect_timer = null;
+			let reconnect_attempt = 0;
+			let last_ws_message_ms = Date.now();
 			let ui_ready = false;
 			let pending_manual_duration_sec = null;
 			const pad0 = (n) => String(Math.floor(n)).padStart(2, '0');
@@ -404,20 +506,31 @@
 
 			const setManualDurationInputs = (totalSeconds) => {
 				const seconds = Math.max(0, Math.floor(totalSeconds));
-				manualDurationH.value = String(Math.floor(seconds / 3600));
-				manualDurationM.value = String(Math.floor(seconds / 60) % 60);
+				manualDurationHValue.textContent = String(Math.floor(seconds / 3600));
+				manualDurationMValue.textContent = String(Math.floor(seconds / 60) % 60);
 			};
 
 			const getManualDurationSeconds = () => {
-				const hours = clamp(parseInt(manualDurationH.value) || 0, 0, 12);
-				const minutes = clamp(parseInt(manualDurationM.value) || 0, 0, 59);
+				const hours = clamp(parseInt(manualDurationHValue.textContent) || 0, 0, 12);
+				const minutes = clamp(parseInt(manualDurationMValue.textContent) || 0, 0, 59);
 				return clamp(hours * 3600 + minutes * 60, 1, 12 * 3600);
 			};
 
 			const setScheduleDurationInputs = (totalMinutes) => {
 				const minutes = Math.max(0, Math.floor(totalMinutes));
-				scheduleDurationH.value = String(Math.floor(minutes / 60));
-				scheduleDurationM.value = String(minutes % 60);
+				scheduleDurationHValue.textContent = String(Math.floor(minutes / 60));
+				scheduleDurationMValue.textContent = String(minutes % 60);
+			};
+
+			const getScheduleDurationMinutes = () => {
+				const hours = clamp(parseInt(scheduleDurationHValue.textContent) || 0, 0, 12);
+				const minutes = clamp(parseInt(scheduleDurationMValue.textContent) || 0, 0, 59);
+				return hours * 60 + minutes;
+			};
+
+			const stepDuration = (valueNode, delta, min, max) => {
+				const current = parseInt(valueNode.textContent) || 0;
+				valueNode.textContent = String(clamp(current + delta, min, max));
 			};
 
 			const durationToClock = (total) => {
@@ -432,8 +545,10 @@
 				if (ui_ready) {
 					setManualDurationInputs(manual_duration_sec);
 				}
-				manualDurationH.disabled = switch_state.checked;
-				manualDurationM.disabled = switch_state.checked;
+				manualDurationHDown.disabled = switch_state.checked;
+				manualDurationHUp.disabled = switch_state.checked;
+				manualDurationMDown.disabled = switch_state.checked;
+				manualDurationMUp.disabled = switch_state.checked;
 			};
 
 			const renderTimeLeft = () => {
@@ -448,6 +563,24 @@
 				const d = new Date(local_epoch_sec * 1000);
 				const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 				currentTime.textContent = `${days[d.getUTCDay()]} ${pad0(d.getUTCHours())}:${pad0(d.getUTCMinutes())}:${pad0(d.getUTCSeconds())}`;
+			};
+
+			const setDisconnectedState = () => {
+				connectionState.textContent = 'Disconnected';
+				currentTime.textContent = 'disconnected';
+				uptime.textContent = 'disconnected';
+				timeLeft.textContent = '--';
+			};
+
+			const setConnectingState = () => {
+				connectionState.textContent = 'Time left';
+				currentTime.textContent = 'disconnected';
+				uptime.textContent = 'disconnected';
+				timeLeft.textContent = '--';
+			};
+
+			const setConnectedState = () => {
+				connectionState.textContent = 'Time left';
 			};
 
 			const setDaysFromMask = (mask) => {
@@ -522,92 +655,155 @@
 				}
 			};
 
+			const start_websocket_watchdog = () => {
+				if (websocket_watchdog_timer !== null) return;
+				websocket_watchdog_timer = setInterval(() => {
+					if (websocket && websocket.readyState === WebSocket.OPEN && Date.now() - last_ws_message_ms > 6000) {
+						console.warn('WebSocket heartbeat timeout');
+						stop_uptime_timer();
+						setDisconnectedState();
+						try { websocket.close(); } catch (error) {}
+					}
+				}, 1000);
+			};
+
+			const stop_websocket_watchdog = () => {
+				if (websocket_watchdog_timer !== null) {
+					clearInterval(websocket_watchdog_timer);
+					websocket_watchdog_timer = null;
+				}
+			};
+
+			const scheduleReconnect = () => {
+				if (reconnect_timer !== null) return;
+				setConnectingState();
+				const delay = Math.min(1000 * Math.pow(2, reconnect_attempt), 10000);
+				reconnect_attempt += 1;
+				reconnect_timer = setTimeout(() => {
+					reconnect_timer = null;
+					connectWebSocket();
+				}, delay);
+			};
+
+			const clearReconnectTimer = () => {
+				if (reconnect_timer !== null) {
+					clearTimeout(reconnect_timer);
+					reconnect_timer = null;
+				}
+				reconnect_attempt = 0;
+			};
+
 			const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-			const websocket = new WebSocket(`${wsProtocol}//${window.location.host}${WS_PATH}`);
-			window.websocket = websocket;
+			let websocket = null;
+			window.websocket = null;
+
+			const connectWebSocket = () => {
+				if (websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
+					return;
+				}
+				websocket = new WebSocket(`${wsProtocol}//${window.location.host}${WS_PATH}`);
+				window.websocket = websocket;
+
+				websocket.onopen = function () {
+					console.log('WebSocket connected');
+					last_ws_message_ms = Date.now();
+					clearReconnectTimer();
+					setConnectedState();
+					start_uptime_timer();
+					start_websocket_watchdog();
+					websocket.send('get_state:1');
+					sendTimeSync();
+					if (pending_manual_duration_sec !== null) {
+						websocket.send('set_manual_duration:' + pending_manual_duration_sec);
+						pending_manual_duration_sec = null;
+					}
+				};
+
+				websocket.onclose = function () {
+					console.warn('WebSocket disconnected');
+					stop_uptime_timer();
+					stop_websocket_watchdog();
+					setDisconnectedState();
+					scheduleReconnect();
+				};
+
+				websocket.onerror = function () {
+					console.warn('WebSocket error');
+				};
+
+				websocket.onmessage = function (event) {
+					try {
+						last_ws_message_ms = Date.now();
+						if (event.data.startsWith('hb:')) {
+							return;
+						}
+						if (event.data.startsWith('notice:')) {
+							scheduleStatus.textContent = event.data.slice('notice:'.length);
+							return;
+						}
+
+						if (!event.data.startsWith("{")) {
+							const logMessage = event.data.replace("[log]:", "");
+							console.log(logMessage);
+							return;
+						}
+						console.log(`event.data: ${event.data}`);
+						const data = JSON.parse(event.data);
+						if (data['uptime']) {
+							uptime_sec = parseInt(data['uptime']) * 1000;
+						}
+
+						remaining_time_sec = parseInt(data['remaining_time']) || 0;
+						switch_state.checked = remaining_time_sec != 0;
+						renderTimeLeft();
+						renderManual();
+						applyBackendState(data);
+
+						const hasScheduleFields =
+							Object.prototype.hasOwnProperty.call(data, 'schedule_enabled') &&
+							Object.prototype.hasOwnProperty.call(data, 'schedule_days') &&
+							Object.prototype.hasOwnProperty.call(data, 'schedule_start') &&
+							Object.prototype.hasOwnProperty.call(data, 'schedule_duration');
+
+						if (hasScheduleFields) {
+							const enabledNum = toIntOrNull(data['schedule_enabled']);
+							const scheduleDays = toIntOrNull(data['schedule_days']);
+							const startMin = toIntOrNull(data['schedule_start']);
+							const durationMin = toIntOrNull(data['schedule_duration']);
+
+							if (enabledNum !== null) scheduleEnabled.checked = enabledNum === 1;
+							if (scheduleDays !== null) setDaysFromMask(scheduleDays & 0x7F);
+							if (startMin !== null) {
+								const hh = Math.floor(startMin / 60);
+								const mm = startMin % 60;
+								scheduleStart.value = `${pad0(hh)}:${pad0(mm)}`;
+							}
+							if (durationMin !== null) {
+								setScheduleDurationInputs(durationMin);
+							}
+						}
+
+						const localEpoch = toIntOrNull(data['local_epoch']);
+						if (localEpoch !== null && localEpoch >= 0) {
+							local_epoch_sec = localEpoch;
+							renderCurrentTime();
+						}
+					} catch (error) {
+						console.error(error);
+					}
+				};
+			};
 
 			const sendManualDurationToBackend = (seconds) => {
 				const msg = 'set_manual_duration:' + seconds;
-				if (websocket.readyState === WebSocket.OPEN) {
+				if (websocket && websocket.readyState === WebSocket.OPEN) {
 					websocket.send(msg);
 					return;
 				}
 				pending_manual_duration_sec = seconds;
 			};
 
-			websocket.onopen = function () {
-				console.log('WebSocket connected');
-				start_uptime_timer();
-				websocket.send('get_state:1');
-				sendTimeSync();
-				if (pending_manual_duration_sec !== null) {
-					websocket.send('set_manual_duration:' + pending_manual_duration_sec);
-					pending_manual_duration_sec = null;
-				}
-			};
-
-			websocket.onclose = function () {
-				console.warn('WebSocket disconnected — stopping uptime');
-				stop_uptime_timer();
-			};
-
-			websocket.onmessage = function (event) {
-				try {
-					if (event.data.startsWith('notice:')) {
-						scheduleStatus.textContent = event.data.slice('notice:'.length);
-						return;
-					}
-
-					if (!event.data.startsWith("{")) {
-						const logMessage = event.data.replace("[log]:", "");
-						console.log(logMessage);
-						return;
-					}
-					console.log(`event.data: ${event.data}`);
-					const data = JSON.parse(event.data);
-					if (data['uptime']) {
-						uptime_sec = parseInt(data['uptime']) * 1000;
-					}
-
-					remaining_time_sec = parseInt(data['remaining_time']) || 0;
-					switch_state.checked = remaining_time_sec != 0;
-					renderTimeLeft();
-					renderManual();
-					applyBackendState(data);
-
-					const hasScheduleFields =
-						Object.prototype.hasOwnProperty.call(data, 'schedule_enabled') &&
-						Object.prototype.hasOwnProperty.call(data, 'schedule_days') &&
-						Object.prototype.hasOwnProperty.call(data, 'schedule_start') &&
-						Object.prototype.hasOwnProperty.call(data, 'schedule_duration');
-
-					if (hasScheduleFields) {
-						const enabledNum = toIntOrNull(data['schedule_enabled']);
-						const scheduleDays = toIntOrNull(data['schedule_days']);
-						const startMin = toIntOrNull(data['schedule_start']);
-						const durationMin = toIntOrNull(data['schedule_duration']);
-
-						if (enabledNum !== null) scheduleEnabled.checked = enabledNum === 1;
-						if (scheduleDays !== null) setDaysFromMask(scheduleDays & 0x7F);
-						if (startMin !== null) {
-							const hh = Math.floor(startMin / 60);
-							const mm = startMin % 60;
-							scheduleStart.value = `${pad0(hh)}:${pad0(mm)}`;
-						}
-						if (durationMin !== null) {
-							setScheduleDurationInputs(durationMin);
-						}
-					}
-
-					const localEpoch = toIntOrNull(data['local_epoch']);
-					if (localEpoch !== null && localEpoch >= 0) {
-						local_epoch_sec = localEpoch;
-						renderCurrentTime();
-					}
-				} catch (error) {
-					console.error(error);
-				}
-			};
+			connectWebSocket();
 
 			const websocket_send_msg = () => {
 				const targetSec = switch_state.checked ? getManualDurationSeconds() : 0;
@@ -623,25 +819,55 @@
 
 			document.getElementById('switch_on_off').onclick = websocket_send_msg;
 
-			manualDurationH.onchange = () => {
+			manualDurationHDown.onclick = () => {
+				stepDuration(manualDurationHValue, -1, 0, 12);
 				manual_duration_sec = getManualDurationSeconds();
 				renderManual();
 				sendManualDurationToBackend(manual_duration_sec);
 			};
 
-			manualDurationM.onchange = () => {
+			manualDurationHUp.onclick = () => {
+				stepDuration(manualDurationHValue, 1, 0, 12);
 				manual_duration_sec = getManualDurationSeconds();
 				renderManual();
 				sendManualDurationToBackend(manual_duration_sec);
+			};
+
+			manualDurationMDown.onclick = () => {
+				stepDuration(manualDurationMValue, -1, 0, 59);
+				manual_duration_sec = getManualDurationSeconds();
+				renderManual();
+				sendManualDurationToBackend(manual_duration_sec);
+			};
+
+			manualDurationMUp.onclick = () => {
+				stepDuration(manualDurationMValue, 1, 0, 59);
+				manual_duration_sec = getManualDurationSeconds();
+				renderManual();
+				sendManualDurationToBackend(manual_duration_sec);
+			};
+
+			scheduleDurationHDown.onclick = () => {
+				stepDuration(scheduleDurationHValue, -1, 0, 12);
+			};
+
+			scheduleDurationHUp.onclick = () => {
+				stepDuration(scheduleDurationHValue, 1, 0, 12);
+			};
+
+			scheduleDurationMDown.onclick = () => {
+				stepDuration(scheduleDurationMValue, -1, 0, 59);
+			};
+
+			scheduleDurationMUp.onclick = () => {
+				stepDuration(scheduleDurationMValue, 1, 0, 59);
 			};
 
 			saveSchedule.onclick = () => {
 				const daysMask = getDaysMask();
 				const timeParts = (scheduleStart.value || '08:00').split(':');
 				const startMin = (parseInt(timeParts[0]) || 0) * 60 + (parseInt(timeParts[1]) || 0);
-				const durationHours = clamp(parseInt(scheduleDurationH.value) || 0, 0, 12);
-				const durationMinutes = clamp(parseInt(scheduleDurationM.value) || 0, 0, 59);
-				const durationMin = durationHours * 60 + durationMinutes;
+				const durationMin = getScheduleDurationMinutes();
 				const enabled = scheduleEnabled.checked ? 1 : 0;
 
 				const msg = `set_schedule:${enabled}:${daysMask}:${startMin}:${durationMin}`;

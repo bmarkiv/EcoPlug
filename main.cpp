@@ -34,6 +34,7 @@ static bool utc_synced = false;
 static bool ntp_time_valid = false;
 static bool ntp_started = false;
 static unsigned long last_ntp_poll_ms = 0;
+static unsigned long last_ws_heartbeat_ms = 0;
 static Preferences time_prefs;
 
 // -------------------- Channel --------------------
@@ -66,6 +67,7 @@ int64_t now_utc_sec();
 int find_char(const char *str, char c);
 bool schedules_overlap(const ScheduleConfig &a, const ScheduleConfig &b);
 void set_channel_output(Channel &ch, bool on);
+void send_websocket_heartbeat(unsigned long now_ms);
 
 AsyncWebServer server(80);
 WiFiManager WiFiManager(server);
@@ -300,6 +302,13 @@ void sendChannelState(Channel &ch, unsigned long now) {
     if (!ch.ws->count()) return;
     buildStateJson(ch, now);
     ch.ws->textAll(ws_msg);
+}
+
+void send_websocket_heartbeat(unsigned long now_ms) {
+    if (now_ms - last_ws_heartbeat_ms < 2000) return;
+    last_ws_heartbeat_ms = now_ms;
+    ws_filter.textAll("hb:1");
+    ws_refill.textAll("hb:1");
 }
 
 int find_char(const char *str, char c) {
@@ -606,6 +615,7 @@ void loop(void) {
     ensure_ntp_sync();
     check_channel_schedule(filter_ch, now);
     check_channel_schedule(refill_ch, now);
+    send_websocket_heartbeat(now);
 
     bool button = digitalRead(PIN_BUTTON);
     if (button == LOW && last_button_state == HIGH && now - last_button_time > 200) {
