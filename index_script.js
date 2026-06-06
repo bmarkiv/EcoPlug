@@ -86,6 +86,49 @@
 		valueNode.textContent = String(clamp(current + delta, min, max));
 	};
 
+	const bindStepper = (button, step, onChange) => {
+		let pressTimer = null;
+		let repeatTimer = null;
+		let repeating = false;
+		button.style.touchAction = 'manipulation';
+
+		const stop = () => {
+			if (pressTimer !== null) {
+				clearTimeout(pressTimer);
+				pressTimer = null;
+			}
+			if (repeatTimer !== null) {
+				clearInterval(repeatTimer);
+				repeatTimer = null;
+			}
+			repeating = false;
+		};
+
+		button.addEventListener('pointerdown', (event) => {
+			if (event.button !== 0) return;
+			event.preventDefault();
+			button.setPointerCapture(event.pointerId);
+			step();
+			onChange();
+			pressTimer = setTimeout(() => {
+				repeating = true;
+				repeatTimer = setInterval(() => {
+					step();
+					onChange();
+				}, 120);
+			}, 300);
+		});
+
+		button.addEventListener('pointerup', stop);
+		button.addEventListener('pointercancel', stop);
+		button.addEventListener('pointerleave', stop);
+		button.addEventListener('contextmenu', (event) => event.preventDefault());
+		button.addEventListener('click', (event) => {
+			if (repeating) event.preventDefault();
+			stop();
+		});
+	};
+
 	const durationToClock = (total) => {
 		const sec = Math.max(0, Math.floor(total));
 		const hr = Math.floor(sec / 3600);
@@ -372,49 +415,30 @@
 
 	document.getElementById('switch_on_off').onclick = websocket_send_msg;
 
-	manualDurationHDown.onclick = () => {
-		stepDuration(manualDurationHValue, -1, 0, 12);
+	bindStepper(manualDurationHDown, () => stepDuration(manualDurationHValue, -1, 0, 12), () => {
 		manual_duration_sec = getManualDurationSeconds();
 		renderManual();
 		sendManualDurationToBackend(manual_duration_sec);
-	};
-
-	manualDurationHUp.onclick = () => {
-		stepDuration(manualDurationHValue, 1, 0, 12);
+	});
+	bindStepper(manualDurationHUp, () => stepDuration(manualDurationHValue, 1, 0, 12), () => {
 		manual_duration_sec = getManualDurationSeconds();
 		renderManual();
 		sendManualDurationToBackend(manual_duration_sec);
-	};
-
-	manualDurationMDown.onclick = () => {
-		stepDuration(manualDurationMValue, -1, 0, 59);
+	});
+	bindStepper(manualDurationMDown, () => stepDuration(manualDurationMValue, -1, 0, 59), () => {
 		manual_duration_sec = getManualDurationSeconds();
 		renderManual();
 		sendManualDurationToBackend(manual_duration_sec);
-	};
-
-	manualDurationMUp.onclick = () => {
-		stepDuration(manualDurationMValue, 1, 0, 59);
+	});
+	bindStepper(manualDurationMUp, () => stepDuration(manualDurationMValue, 1, 0, 59), () => {
 		manual_duration_sec = getManualDurationSeconds();
 		renderManual();
 		sendManualDurationToBackend(manual_duration_sec);
-	};
-
-	scheduleDurationHDown.onclick = () => {
-		stepDuration(scheduleDurationHValue, -1, 0, 12);
-	};
-
-	scheduleDurationHUp.onclick = () => {
-		stepDuration(scheduleDurationHValue, 1, 0, 12);
-	};
-
-	scheduleDurationMDown.onclick = () => {
-		stepDuration(scheduleDurationMValue, -1, 0, 59);
-	};
-
-	scheduleDurationMUp.onclick = () => {
-		stepDuration(scheduleDurationMValue, 1, 0, 59);
-	};
+	});
+	bindStepper(scheduleDurationHDown, () => stepDuration(scheduleDurationHValue, -1, 0, 12), () => {});
+	bindStepper(scheduleDurationHUp, () => stepDuration(scheduleDurationHValue, 1, 0, 12), () => {});
+	bindStepper(scheduleDurationMDown, () => stepDuration(scheduleDurationMValue, -1, 0, 59), () => {});
+	bindStepper(scheduleDurationMUp, () => stepDuration(scheduleDurationMValue, 1, 0, 59), () => {});
 
 	saveSchedule.onclick = () => {
 		const daysMask = getDaysMask();

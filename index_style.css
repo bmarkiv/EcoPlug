@@ -129,6 +129,9 @@ h3 {
 	line-height: 1;
 	cursor: pointer;
 	-webkit-tap-highlight-color: transparent;
+	-webkit-user-select: none;
+	user-select: none;
+	touch-action: manipulation;
 }
 
 .stepper-btn:focus,
@@ -148,11 +151,15 @@ h3 {
 	font-weight: 700;
 	text-align: center;
 	box-sizing: border-box;
+	-webkit-user-select: none;
+	user-select: none;
 }
 
 .stepper-unit {
 	min-width: 16px;
 	font-weight: 700;
+	-webkit-user-select: none;
+	user-select: none;
 }
 
 .stepper-btn:disabled {
