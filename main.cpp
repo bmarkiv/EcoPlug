@@ -111,6 +111,9 @@ void setup_io() {
 }
 
 void switch_state(bool on) {
+    static bool current_state = LOW;
+    if (current_state == on) return;
+    current_state = on;
     digitalWrite(PIN_RELAY, on ? HIGH : LOW);
     log("Switch state changed: %s", on ? "ON" : "OFF");
 }

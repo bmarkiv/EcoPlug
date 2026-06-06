@@ -1,14 +1,29 @@
 import gzip
 import hashlib
+import re
 from datetime import datetime
 from pathlib import Path
 
+def combine_html_chunks(html_path: Path) -> str:
+    html = html_path.read_text(encoding="utf-8")
+    base_dir = html_path.parent
+
+    def replace_chunk(match: re.Match[str]) -> str:
+        chunk_name = match.group(1)
+        chunk_path = base_dir / chunk_name
+        return chunk_path.read_text(encoding="utf-8")
+
+    html = re.sub(r'<!--\s*#include\s+"([^"]+)"\s*-->', replace_chunk, html)
+    html = html.replace("__DATE__", datetime.now().strftime("%b %d %Y %H:%M:%S"))
+    html = re.sub(r"\n[ \t]+", "\n", html)
+    # html = re.sub(r"\n", "", html)
+    return html
+
+
 def compress_html(html_path: Path, header_path: Path, array_name: str, len_name: str, etag_name: str) -> None:
-    with html_path.open("r", encoding="utf-8") as f:
-        html = f.read()
+    html = combine_html_chunks(html_path)
 
     date_time_macro = datetime.now().strftime("%b %d %Y %H:%M:%S")
-    html = html.replace("__DATE__", date_time_macro)
 
     gz_data = gzip.compress(html.encode("utf-8"))
     byte_list = ",".join(f"0x{b:02x}" for b in gz_data)
@@ -27,11 +42,12 @@ def compress_html(html_path: Path, header_path: Path, array_name: str, len_name:
 
 def generate_header() -> None:
     project_dir = Path(str(env["PROJECT_DIR"])) if env is not None else Path.cwd()
+    html_path = project_dir / "index.html"
 
     print("Regenerating header...")
 
     compress_html(
-        project_dir / "index.html",
+        html_path,
         project_dir / "index_html_gz.h",
         "index_html_gz", "index_html_gz_len", "index_html_gz_etag",
     )
