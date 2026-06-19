@@ -323,7 +323,6 @@ int find_char(const char *str, char c) {
 void handleChannelMessage(Channel &ch, char *msg) {
     int colon = find_char(msg, ':');
     if (colon < 0) { app_log("%s unsupported command: %s", ch.label, msg); return; }
-    Channel *other = (&ch == &filter_ch) ? &refill_ch : &filter_ch;
 
     if (strncmp(msg, "set_duration:", 13) == 0) {
         auto now = millis();
@@ -337,12 +336,6 @@ void handleChannelMessage(Channel &ch, char *msg) {
                 save_channel_schedule(ch);
             }
             ch.switch_off_time = now + dur * 1000;
-            if (dur > 0 && other->switch_off_time > now) {
-                other->switch_off_time = 0;
-                set_channel_output(*other, false);
-                sendChannelState(*other, now);
-                app_log("%s turned off because %s was turned on", other->label, ch.label);
-            }
             set_channel_output(ch, dur > 0);
             app_log("%s duration_on: %ld", ch.label, dur);
         }
@@ -402,14 +395,6 @@ void handleChannelMessage(Channel &ch, char *msg) {
         proposed.start_minute = (uint16_t)max(0, min(1439, atoi(start_buf)));
         proposed.duration_min = (uint16_t)max(1, min(720,  atoi(payload + c3 + 1)));
 
-        ScheduleConfig other_persisted = load_channel_schedule_snapshot(other->prefs_ns);
-        if (schedules_overlap_ignoring_enabled(proposed, other_persisted)) {
-            app_log("%s schedule rejected: overlaps with %s schedule", ch.label, other->label);
-            ch.ws->textAll("notice:Schedule overlaps with other channel schedule");
-            sendChannelState(ch, millis());
-            return;
-        }
-
         ch.cfg = proposed;
         ch.last_schedule_local_day = -1;
         save_channel_schedule(ch);
@@ -441,14 +426,6 @@ void check_channel_schedule(Channel &ch, unsigned long now_ms) {
     if (minute_of_day != ch.cfg.start_minute) return;
     if ((sec_of_day % 60) != 0) return;
     if (ch.last_schedule_local_day == local_day) return;
-
-    Channel *other = (&ch == &filter_ch) ? &refill_ch : &filter_ch;
-    if (other->switch_off_time > now_ms) {
-        other->switch_off_time = 0;
-        set_channel_output(*other, false);
-        sendChannelState(*other, now_ms);
-        app_log("%s turned off because %s schedule started", other->label, ch.label);
-    }
 
     ch.last_schedule_local_day = local_day;
     ch.switch_off_time = now_ms + (unsigned long)ch.cfg.duration_min * 60UL * 1000UL;
@@ -523,12 +500,6 @@ unsigned long change_state(const char *data) {
     }
     long duration_on = atol(data);
     filter_ch.switch_off_time = now + duration_on * 1000;
-    if (duration_on > 0 && refill_ch.switch_off_time > now) {
-        refill_ch.switch_off_time = 0;
-        set_channel_output(refill_ch, false);
-        sendChannelState(refill_ch, now);
-        app_log("%s turned off because %s was turned on", refill_ch.label, filter_ch.label);
-    }
     app_log("duration_on: %ld, switch_off_time: %ld", duration_on, filter_ch.switch_off_time - now);
     set_channel_output(filter_ch, duration_on > 0);
     return now;
@@ -628,12 +599,6 @@ void loop(void) {
         last_button_time = now;
         bool is_on = filter_ch.switch_off_time > 0;
         filter_ch.switch_off_time = is_on ? 0 : now + MAX_DURATION_ON;
-        if (!is_on && refill_ch.switch_off_time > now) {
-            refill_ch.switch_off_time = 0;
-            set_channel_output(refill_ch, false);
-            sendChannelState(refill_ch, now);
-            app_log("%s turned off because %s was turned on", refill_ch.label, filter_ch.label);
-        }
         set_channel_output(filter_ch, !is_on);
         sendChannelState(filter_ch, now);
         app_log("Button pressed — toggled switch");
