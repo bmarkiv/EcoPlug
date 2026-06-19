@@ -26,6 +26,7 @@ class WiFiManager {
 
 	struct ScanResult {
 		std::vector<String> ssids;
+		std::vector<String> bssids;
 		std::vector<int> rssis;
 		bool success = false;
 	};
@@ -217,9 +218,11 @@ class WiFiManager {
 		std::sort(indices.begin(), indices.end(), [](int a, int b) { return WiFi.RSSI(a) > WiFi.RSSI(b); });
 		for (int i : indices) {
 			String found = WiFi.SSID(i);
-			logMessage("Found SSID '%s' (%d dBm)", found.c_str(), WiFi.RSSI(i));
+			String bssid = WiFi.BSSIDstr(i);
+			logMessage("Found SSID '%s' [%s] (%d dBm)", found.c_str(), bssid.c_str(), WiFi.RSSI(i));
 			if (found.length() == 0) continue;
 			result.ssids.push_back(found);
+			result.bssids.push_back(bssid);
 			result.rssis.push_back(WiFi.RSSI(i));
 		}
 		result.success = true;
@@ -449,7 +452,10 @@ public:
 					last_wifi_status = WL_CONNECTED;
 					disconnect_detected_at = 0;
 					sta_attempt_in_progress = false;
-					logMessage("STA connected. IP: %s", WiFi.localIP().toString().c_str());
+					logMessage("STA connected. IP: %s, BSSID: %s, RSSI: %d dBm",
+						WiFi.localIP().toString().c_str(),
+						WiFi.BSSIDstr().c_str(),
+						WiFi.RSSI());
 					if (start_web_server) start_web_server();
 					if (ap_mode) {
 						stopAP();
@@ -507,9 +513,24 @@ public:
 		if (scan_requested) return "<option disabled>Scanning...</option>";
 		if (!scanCache.success) return "<option disabled>Scan failed</option>";
 		String options;
+		String connected_bssid = WiFi.status() == WL_CONNECTED ? WiFi.BSSIDstr() : String();
+		bool selected_connected_bssid = false;
+		bool selected_saved_ssid = false;
 		for (size_t i = 0; i < scanCache.ssids.size(); ++i) {
-			options += "<option value='" + scanCache.ssids[i] + "'>";
-			options += scanCache.ssids[i] + " (" + String(scanCache.rssis[i]) + " dBm)</option>";
+			options += "<option value='" + scanCache.ssids[i] + "'";
+			if (!selected_connected_bssid && connected_bssid.length() > 0 && i < scanCache.bssids.size() && scanCache.bssids[i] == connected_bssid) {
+				options += " selected";
+				selected_connected_bssid = true;
+			} else if (!selected_connected_bssid && !selected_saved_ssid && scanCache.ssids[i] == ssid) {
+				options += " selected";
+				selected_saved_ssid = true;
+			}
+			options += ">";
+			options += scanCache.ssids[i] + " (" + String(scanCache.rssis[i]) + " dBm)";
+			if (i < scanCache.bssids.size()) {
+				options += " [" + scanCache.bssids[i] + "]";
+			}
+			options += "</option>";
 		}
 		if (options.length() == 0) return "<option disabled>No networks found</option>";
 		return options;
