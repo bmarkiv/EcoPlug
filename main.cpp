@@ -566,6 +566,7 @@ void start_web_server() {
     server.on("/refill", HTTP_GET, [](AsyncWebServerRequest *r) { serve_index(r, "no-store"); });
     server.on("/refill/", HTTP_GET, [](AsyncWebServerRequest *r) { serve_index(r, "no-store"); });
     server.on("/",       HTTP_GET, [](AsyncWebServerRequest *r) { serve_index(r, "max-age=86400"); });
+    WiFiManager.registerSetupRoutes();
     WiFiManager.registerResetWiFi();
     server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *req) {
         req->send(200, "text/plain", "Restarting...");
