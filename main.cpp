@@ -68,12 +68,13 @@ int find_char(const char *str, char c);
 bool schedules_overlap(const ScheduleConfig &a, const ScheduleConfig &b);
 void set_channel_output(Channel &ch, bool on);
 void send_websocket_heartbeat(unsigned long now_ms);
+void app_log(const char* format, ...);
 
 AsyncWebServer server(80);
 WiFiManager WiFiManager(server);
 
 // -------------------- Logging --------------------
-void log(const char* format, ...) {
+void app_log(const char* format, ...) {
     char buffer[256];
     unsigned long now_ms = millis();
     int size = 0;
@@ -115,7 +116,7 @@ void switch_state(bool on) {
     if (current_state == on) return;
     current_state = on;
     digitalWrite(PIN_RELAY, on ? HIGH : LOW);
-    log("Switch state changed: %s", on ? "ON" : "OFF");
+    app_log("Switch state changed: %s", on ? "ON" : "OFF");
 }
 
 void set_channel_output(Channel &ch, bool on) {
@@ -124,7 +125,7 @@ void set_channel_output(Channel &ch, bool on) {
         return;
     }
     digitalWrite(ch.pin, on ? HIGH : LOW);
-    log("%s state changed: %s", ch.label, on ? "ON" : "OFF");
+    app_log("%s state changed: %s", ch.label, on ? "ON" : "OFF");
 }
 
 bool minute_in_wrapped_range(int minute, int start, int end_exclusive) {
@@ -253,7 +254,7 @@ void ensure_ntp_sync() {
     if (!ntp_started) {
         configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
         ntp_started = true;
-        log("NTP started");
+        app_log("NTP started");
     }
     auto now_ms = millis();
     if (now_ms - last_ntp_poll_ms < 5000) return;
@@ -262,7 +263,7 @@ void ensure_ntp_sync() {
     if (ntp_now > 1700000000) {
         utc_base_sec = (int64_t)ntp_now;
         utc_base_millis = now_ms;
-        if (!ntp_time_valid) log("NTP time acquired: %lld", (long long)utc_base_sec);
+        if (!ntp_time_valid) app_log("NTP time acquired: %lld", (long long)utc_base_sec);
         utc_synced = true;
         ntp_time_valid = true;
     }
@@ -321,7 +322,7 @@ int find_char(const char *str, char c) {
 
 void handleChannelMessage(Channel &ch, char *msg) {
     int colon = find_char(msg, ':');
-    if (colon < 0) { log("%s unsupported command: %s", ch.label, msg); return; }
+    if (colon < 0) { app_log("%s unsupported command: %s", ch.label, msg); return; }
     Channel *other = (&ch == &filter_ch) ? &refill_ch : &filter_ch;
 
     if (strncmp(msg, "set_duration:", 13) == 0) {
@@ -340,10 +341,10 @@ void handleChannelMessage(Channel &ch, char *msg) {
                 other->switch_off_time = 0;
                 set_channel_output(*other, false);
                 sendChannelState(*other, now);
-                log("%s turned off because %s was turned on", other->label, ch.label);
+                app_log("%s turned off because %s was turned on", other->label, ch.label);
             }
             set_channel_output(ch, dur > 0);
-            log("%s duration_on: %ld", ch.label, dur);
+            app_log("%s duration_on: %ld", ch.label, dur);
         }
         sendChannelState(ch, now);
         return;
@@ -355,7 +356,7 @@ void handleChannelMessage(Channel &ch, char *msg) {
         if (dur <= 0) dur = MAX_DURATION_ON / 1000;
         ch.manual_duration_sec = (uint32_t)min(12L * 3600L, dur);
         save_channel_schedule(ch);
-        log("%s manual duration saved: %lu", ch.label, (unsigned long)ch.manual_duration_sec);
+        app_log("%s manual duration saved: %lu", ch.label, (unsigned long)ch.manual_duration_sec);
         sendChannelState(ch, millis());
         return;
     }
@@ -403,7 +404,7 @@ void handleChannelMessage(Channel &ch, char *msg) {
 
         ScheduleConfig other_persisted = load_channel_schedule_snapshot(other->prefs_ns);
         if (schedules_overlap_ignoring_enabled(proposed, other_persisted)) {
-            log("%s schedule rejected: overlaps with %s schedule", ch.label, other->label);
+            app_log("%s schedule rejected: overlaps with %s schedule", ch.label, other->label);
             ch.ws->textAll("notice:Schedule overlaps with other channel schedule");
             sendChannelState(ch, millis());
             return;
@@ -412,14 +413,14 @@ void handleChannelMessage(Channel &ch, char *msg) {
         ch.cfg = proposed;
         ch.last_schedule_local_day = -1;
         save_channel_schedule(ch);
-        log("%s schedule saved: enabled=%d days=%u start=%u duration=%u",
+        app_log("%s schedule saved: enabled=%d days=%u start=%u duration=%u",
             ch.label, ch.cfg.enabled ? 1 : 0, ch.cfg.days_mask, ch.cfg.start_minute, ch.cfg.duration_min);
         ch.ws->textAll("notice:Schedule saved");
         sendChannelState(ch, millis());
         return;
     }
 
-    log("%s unsupported command: %s", ch.label, msg);
+    app_log("%s unsupported command: %s", ch.label, msg);
 }
 
 void check_channel_schedule(Channel &ch, unsigned long now_ms) {
@@ -446,13 +447,13 @@ void check_channel_schedule(Channel &ch, unsigned long now_ms) {
         other->switch_off_time = 0;
         set_channel_output(*other, false);
         sendChannelState(*other, now_ms);
-        log("%s turned off because %s schedule started", other->label, ch.label);
+        app_log("%s turned off because %s schedule started", other->label, ch.label);
     }
 
     ch.last_schedule_local_day = local_day;
     ch.switch_off_time = now_ms + (unsigned long)ch.cfg.duration_min * 60UL * 1000UL;
     set_channel_output(ch, true);
-    log("%s schedule trigger: dow=%d start_min=%u duration_min=%u",
+    app_log("%s schedule trigger: dow=%d start_min=%u duration_min=%u",
         ch.label, day_of_week, ch.cfg.start_minute, ch.cfg.duration_min);
     sendChannelState(ch, now_ms);
 }
@@ -468,10 +469,10 @@ void handleWebSocketMessage(Channel &ch, void *arg, char *data, size_t len) {
         len = min(len, sizeof(msg) - 1);
         memcpy(msg, data, len);
         msg[len] = 0;
-        log("WS[%s]: '%s'", ch.label, msg);
+        app_log("WS[%s]: '%s'", ch.label, msg);
         handleChannelMessage(ch, msg);
     } else {
-        log("WS[%s] unsupported frame: final:%d index:%d len:%d opcode:%d",
+        app_log("WS[%s] unsupported frame: final:%d index:%d len:%d opcode:%d",
             ch.label, info->final, info->index, info->len, info->opcode);
     }
 }
@@ -481,10 +482,10 @@ void onFilterEvent(AsyncWebSocket *srv, AsyncWebSocketClient *client,
     switch (type) {
         case WS_EVT_CONNECT:
             sendChannelStateToClient(filter_ch, client, millis());
-            log("%s WS #%u connected from %s", filter_ch.label, client->id(), client->remoteIP().toString().c_str());
+            app_log("%s WS #%u connected from %s", filter_ch.label, client->id(), client->remoteIP().toString().c_str());
             break;
         case WS_EVT_DISCONNECT:
-            log("%s WS #%u disconnected", filter_ch.label, client->id());
+            app_log("%s WS #%u disconnected", filter_ch.label, client->id());
             break;
         case WS_EVT_DATA:
             handleWebSocketMessage(filter_ch, arg, (char *)data, len);
@@ -498,10 +499,10 @@ void onRefillEvent(AsyncWebSocket *srv, AsyncWebSocketClient *client,
     switch (type) {
         case WS_EVT_CONNECT:
             sendChannelStateToClient(refill_ch, client, millis());
-            log("%s WS #%u connected from %s", refill_ch.label, client->id(), client->remoteIP().toString().c_str());
+            app_log("%s WS #%u connected from %s", refill_ch.label, client->id(), client->remoteIP().toString().c_str());
             break;
         case WS_EVT_DISCONNECT:
-            log("%s WS #%u disconnected", refill_ch.label, client->id());
+            app_log("%s WS #%u disconnected", refill_ch.label, client->id());
             break;
         case WS_EVT_DATA:
             handleWebSocketMessage(refill_ch, arg, (char *)data, len);
@@ -517,7 +518,7 @@ unsigned long change_state(const char *data) {
     filter_ch.switch_off_time = 0;
     set_channel_output(filter_ch, false);
     if (data[0] < '0' || data[0] > '9') {
-        log("Invalid URL: '%s'", data);
+        app_log("Invalid URL: '%s'", data);
         return now;
     }
     long duration_on = atol(data);
@@ -526,16 +527,16 @@ unsigned long change_state(const char *data) {
         refill_ch.switch_off_time = 0;
         set_channel_output(refill_ch, false);
         sendChannelState(refill_ch, now);
-        log("%s turned off because %s was turned on", refill_ch.label, filter_ch.label);
+        app_log("%s turned off because %s was turned on", refill_ch.label, filter_ch.label);
     }
-    log("duration_on: %ld, switch_off_time: %ld", duration_on, filter_ch.switch_off_time - now);
+    app_log("duration_on: %ld, switch_off_time: %ld", duration_on, filter_ch.switch_off_time - now);
     set_channel_output(filter_ch, duration_on > 0);
     return now;
 }
 
 void handleNotFound(AsyncWebServerRequest *request) {
     const char *uri = request->url().c_str();
-    log("uri-raw: %s", uri);
+    app_log("uri-raw: %s", uri);
     while (*uri == '/') uri++;
     if (!isdigit(uri[0])) {
         request->send(404, "text/plain", "Not found");
@@ -575,7 +576,7 @@ void start_web_server() {
     server.addHandler(&ws_filter);
     server.addHandler(&ws_refill);
     server.begin();
-    log("HTTP server started");
+    app_log("HTTP server started");
 
     ws_filter.onEvent(onFilterEvent);
     ws_refill.onEvent(onRefillEvent);
@@ -583,14 +584,14 @@ void start_web_server() {
     ArduinoOTA.onStart([]() {
         switch_state(false);
         String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
-        log("Start updating %s", type.c_str());
+        app_log("Start updating %s", type.c_str());
     });
     ArduinoOTA.onEnd([]() {
-        log("OTA update finished—restarting now");
+        app_log("OTA update finished—restarting now");
         ESP.restart();
     });
     ArduinoOTA.begin();
-    log("OTA service started");
+    app_log("OTA service started");
 }
 
 // -------------------- Main Loop --------------------
@@ -598,6 +599,7 @@ void setup(void) {
     ws_msg.reserve(256);
     setup_io();
     Serial.begin(115200);
+    WiFiManager.setLogger(app_log);
     load_channel_schedule(filter_ch);
     load_channel_schedule(refill_ch);
     load_timezone();
@@ -629,11 +631,11 @@ void loop(void) {
             refill_ch.switch_off_time = 0;
             set_channel_output(refill_ch, false);
             sendChannelState(refill_ch, now);
-            log("%s turned off because %s was turned on", refill_ch.label, filter_ch.label);
+            app_log("%s turned off because %s was turned on", refill_ch.label, filter_ch.label);
         }
         set_channel_output(filter_ch, !is_on);
         sendChannelState(filter_ch, now);
-        log("Button pressed — toggled switch");
+        app_log("Button pressed — toggled switch");
     }
     last_button_state = button;
 
@@ -641,14 +643,14 @@ void loop(void) {
         filter_ch.switch_off_time = 0;
         set_channel_output(filter_ch, false);
         sendChannelState(filter_ch, now);
-        log("Filter switched off due to timeout");
+        app_log("Filter switched off due to timeout");
     }
 
     if (refill_ch.switch_off_time && now > refill_ch.switch_off_time) {
         refill_ch.switch_off_time = 0;
         set_channel_output(refill_ch, false);
         sendChannelState(refill_ch, now);
-        log("Refill switched off due to timeout");
+        app_log("Refill switched off due to timeout");
     }
 
     if (WiFi.status() != WL_CONNECTED) {
