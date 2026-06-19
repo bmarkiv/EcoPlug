@@ -49,8 +49,11 @@ class WiFiManager {
 	unsigned long ap_start = 0;
 	unsigned long state_start = 0;
 	unsigned long disconnect_detected_at = 0;
+	unsigned long last_sta_attempt = 0;
+	unsigned long scan_block_until = 0;
 	WiFiState state = WiFiState::BOOT;
 	bool ap_mode = false;
+	bool sta_attempt_in_progress = false;
 	wl_status_t last_wifi_status = WL_IDLE_STATUS;
 	Preferences prefs;
 	String ssid, pass;
@@ -106,6 +109,17 @@ class WiFiManager {
 		return "WL_UNKNOWN";
 	}
 
+	static const char* scanStatusName(int value) {
+		switch (value) {
+			case WIFI_SCAN_RUNNING:
+				return "WIFI_SCAN_RUNNING";
+			case WIFI_SCAN_FAILED:
+				return "WIFI_SCAN_FAILED";
+		}
+		if (value == 0) return "WIFI_SCAN_NO_RESULTS";
+		return "WIFI_SCAN_RESULT_COUNT";
+	}
+
 	void logMessage(const char* format, ...) {
 		char buffer[256];
 		va_list args;
@@ -146,8 +160,7 @@ class WiFiManager {
 				logMessage("STA disconnected while running. Starting recovery.");
 			}
 			if (ap_mode) {
-				if (now - disconnect_detected_at >= retry_interval) {
-					stopAP();
+				if (!sta_attempt_in_progress && now - last_sta_attempt >= retry_interval) {
 					transitionTo(WiFiState::TRY_STA, now, "periodic retry while disconnected");
 					disconnect_detected_at = 0;
 				}
@@ -156,7 +169,39 @@ class WiFiManager {
 			}
 		} else if (current_status == WL_CONNECTED) {
 			disconnect_detected_at = 0;
+			sta_attempt_in_progress = false;
 		}
+	}
+
+	bool shouldRefreshScan(unsigned long now) const {
+		if (!ap_mode || sta_attempt_in_progress || now < scan_block_until) return false;
+		if (!scanCache.success) return now - last_scan > 5000;
+		return now - last_scan >= 120000;
+	}
+
+	void beginStaAttempt(unsigned long now, const char* reason) {
+		if (!ssid.length()) {
+			logMessage("No credentials. Skipping STA attempt.");
+			transitionTo(WiFiState::START_AP, now, "STA credentials unavailable");
+			return;
+		}
+		last_sta_attempt = now;
+		sta_attempt_in_progress = true;
+		scan_block_until = now + 15000;
+		logMessage("Attempting STA connection to SSID '%s' (%s)", ssid.c_str(), reason);
+		WiFi.mode(ap_mode ? WIFI_AP_STA : WIFI_STA);
+		WiFi.begin(ssid.c_str(), pass.c_str());
+		transitionTo(WiFiState::STA_WAIT, now, reason);
+	}
+
+	void prepareScan(unsigned long now) {
+		logMessage("Preparing SSID refresh: clearing stale STA state before scan");
+		WiFi.mode(WIFI_AP_STA);
+		WiFi.disconnect(true, false);
+		sta_attempt_in_progress = false;
+		last_wifi_status = WiFi.status();
+		last_sta_attempt = now;
+		scan_block_until = now + 2000;
 	}
 
    public:
@@ -183,8 +228,7 @@ class WiFiManager {
 
 		transitionTo(WiFiState::TRY_STA, millis(), "initial startup");
 		if (ssid.length()) {
-			WiFi.mode(WIFI_STA);
-			WiFi.begin(ssid.c_str(), pass.c_str());
+			beginStaAttempt(millis(), "initial startup");
 		} else {
 			transitionTo(WiFiState::START_AP, millis(), "no saved credentials");
 		}
@@ -193,14 +237,20 @@ class WiFiManager {
 	void setLogger(LogFn log_fn) { logger = log_fn; }
 
 	void registerResetWiFi() {
-		server.on("/clear", HTTP_GET, [](AsyncWebServerRequest* req) {
+		server.on("/clear", HTTP_GET, [this](AsyncWebServerRequest* req) {
 			if (req->hasArg("confirm")) {
+				logMessage("Reset WiFi requested. Clearing saved credentials and rebooting.");
 				Preferences prefs;
 				prefs.begin("wifi", false);
 				prefs.clear();
 				prefs.end();
-				req->send(200, "text/html", "<h1>Preferences cleared.</h1>"
+				AsyncWebServerResponse* response = req->beginResponse(
+					200, "text/html", "<h1>Preferences cleared.</h1>"
 					"<h2>Device will restart in 1.5 seconds.</h2>");
+				response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+				response->addHeader("Pragma", "no-cache");
+				response->addHeader("Expires", "0");
+				req->send(response);
 				delay(1500);
 				ESP.restart();				
 				return;
@@ -230,7 +280,11 @@ class WiFiManager {
 				</html>
 			)rawliteral";
 
-			req->send(200, "text/html", html);
+			AsyncWebServerResponse* response = req->beginResponse(200, "text/html", html);
+			response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+			response->addHeader("Pragma", "no-cache");
+			response->addHeader("Expires", "0");
+			req->send(response);
 		});
 	}
 
@@ -240,27 +294,28 @@ class WiFiManager {
 
 		switch (state) {
 			case WiFiState::TRY_STA:
-				if (ssid.length()) {
-					logMessage("Attempting STA connection to SSID '%s'", ssid.c_str());
-					WiFi.mode(WIFI_STA);
-					WiFi.begin(ssid.c_str(), pass.c_str());
-					transitionTo(WiFiState::STA_WAIT, now, "STA connect requested");
-				} else {
-					logMessage("No credentials. Skipping STA attempt.");
-					transitionTo(WiFiState::START_AP, now, "STA credentials unavailable");
-				}
+				beginStaAttempt(now, ap_mode ? "AP+STA reconnect attempt" : "STA connect requested");
 				break;
 
 			case WiFiState::STA_WAIT:
 				if (WiFi.status() == WL_CONNECTED) {
 					last_wifi_status = WL_CONNECTED;
 					disconnect_detected_at = 0;
+					sta_attempt_in_progress = false;
 					logMessage("STA connected. IP: %s", WiFi.localIP().toString().c_str());
 					if (start_web_server) start_web_server();
+					if (ap_mode) {
+						stopAP();
+					}
 					transitionTo(WiFiState::BOOT, now, "STA connected");
 				} else if (now - state_start > 10000) {
 					logMessage("STA connection timed out after %lu ms", now - state_start);
-					transitionTo(WiFiState::START_AP, now, "STA timeout");
+					sta_attempt_in_progress = false;
+					if (ap_mode) {
+						transitionTo(WiFiState::AP_ACTIVE, now, "STA timeout with AP preserved");
+					} else {
+						transitionTo(WiFiState::START_AP, now, "STA timeout");
+					}
 				}
 				break;
 
@@ -270,20 +325,25 @@ class WiFiManager {
 				transitionTo(WiFiState::AP_ACTIVE, now, "AP started");
 				ap_start = now;
 				last_scan = now;
+				if (ssid.length() && !sta_attempt_in_progress && now - last_sta_attempt >= retry_interval) {
+					transitionTo(WiFiState::TRY_STA, now, "AP active retry window open");
+				}
 				break;
 
 			case WiFiState::AP_ACTIVE:
-				if ((now - last_scan > 5000 && !scanCache.success) || now - last_scan > 180*1000) {
+				if (shouldRefreshScan(now)) {
 					scanCache = scanWiFi();
 					last_scan = now;
+				}
+				if (ssid.length() && !sta_attempt_in_progress && now - last_sta_attempt >= retry_interval) {
+					transitionTo(WiFiState::TRY_STA, now, "AP+STA periodic retry");
+					break;
 				}
 				if (now - ap_start > ap_timeout &&
 					WiFi.softAPgetStationNum() == 0) {
 					if (ssid.length()) {
-						logMessage("AP timeout expired with no clients. Retrying STA.");
-						stopAP();
-						transitionTo(WiFiState::TRY_STA, now, "AP timeout retry");
-						disconnect_detected_at = 0;
+						logMessage("AP timeout expired with no clients. Keeping AP+STA recovery active.");
+						ap_start = now;
 					} else {
 						logMessage("No credentials. Holding AP active.");
 						ap_start = now;	 // extend AP lease
@@ -300,9 +360,20 @@ class WiFiManager {
    private:
 	ScanResult scanWiFi() {
 		ScanResult result;
-		int n = WiFi.scanNetworks();
-		if (n <= 0) return scanCache;  // return previous result if scan failed
+		if (sta_attempt_in_progress) {
+			logMessage("Skipping SSID refresh while STA attempt is in progress");
+			return scanCache;
+		}
+		unsigned long now = millis();
+		prepareScan(now);
 		logMessage("scanWiFi started");
+		int n = WiFi.scanNetworks();
+		if (n <= 0) {
+			logMessage("scanWiFi failed: %s (%d). Keeping previous scan cache.",
+					   scanStatusName(n), n);
+			return scanCache;
+		}
+		logMessage("scanWiFi completed: %d networks", n);
 		std::vector<int> indices(n);
 		for (int i = 0; i < n; ++i) indices[i] = i;
 		std::sort(indices.begin(), indices.end(),
@@ -319,8 +390,13 @@ class WiFiManager {
 	}
 
 	void startAP() {
+		if (ap_mode) {
+			logMessage("AP already active. Preserving captive portal.");
+			return;
+		}
 		logMessage("Starting AP");
-		WiFi.mode(WIFI_AP);
+		server.reset();
+		WiFi.mode(WIFI_AP_STA);
 		IPAddress ap_ip;
 		if (!ap_ip.fromString(WiFiConfig::kApIp)) {
 			logMessage("Invalid kApIp config, using 192.168.4.1");
@@ -341,6 +417,12 @@ class WiFiManager {
 		ap_start = millis();
 
 		server.on("/", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderConfigPage());
+		});
+		server.on("/refill", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderConfigPage());
+		});
+		server.on("/refill/", HTTP_GET, [this](AsyncWebServerRequest* req) {
 			req->send(200, "text/html", renderConfigPage());
 		});
 		server.on("/scan", HTTP_GET, [&](AsyncWebServerRequest* req) {
@@ -389,6 +471,9 @@ class WiFiManager {
 		server.on("/ncsi.txt", HTTP_GET, [this](AsyncWebServerRequest* req) {
 			req->send(200, "text/html", renderConfigPage());
 		});
+		server.onNotFound([this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderConfigPage());
+		});
 
 		server.begin();
 		logMessage("AP web server started");
@@ -398,6 +483,9 @@ class WiFiManager {
 		logMessage("Stopping AP");
 		server.reset();	 // Clear handlers
 		WiFi.softAPdisconnect(true);
+		if (WiFi.status() == WL_CONNECTED) {
+			WiFi.mode(WIFI_STA);
+		}
 		ap_mode = false;
 	}
 
