@@ -51,8 +51,47 @@ class WiFiManager {
 	Preferences prefs;
 	String ssid;
 	String pass;
+	String host_name;
+	String sta_ip;
 	void (*start_web_server)() = nullptr;
 	ScanResult scanCache;
+
+	static bool parseIPv4(const String& value, IPAddress& out) {
+		if (!value.length()) return false;
+		return out.fromString(value);
+	}
+
+	void applyStaNetworkConfig() {
+		String trimmed_host = host_name;
+		trimmed_host.trim();
+		if (trimmed_host.length()) {
+			WiFi.setHostname(trimmed_host.c_str());
+			logMessage("Using STA host name '%s'", trimmed_host.c_str());
+		}
+
+		String trimmed_ip = sta_ip;
+		trimmed_ip.trim();
+		if (!trimmed_ip.length()) {
+			WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
+			logMessage("Using DHCP for STA IP");
+			return;
+		}
+
+		IPAddress local_ip;
+		if (!parseIPv4(trimmed_ip, local_ip)) {
+			logMessage("Invalid STA IP '%s'. Falling back to DHCP.", trimmed_ip.c_str());
+			WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
+			return;
+		}
+
+		IPAddress gateway(local_ip[0], local_ip[1], local_ip[2], 1);
+		IPAddress subnet(255, 255, 255, 0);
+		if (!WiFi.config(local_ip, gateway, subnet)) {
+			logMessage("WiFi.config failed for STA IP %s. Connection will continue.", trimmed_ip.c_str());
+		} else {
+			logMessage("Using STA IP %s (gateway %s)", trimmed_ip.c_str(), gateway.toString().c_str());
+		}
+	}
 
 	static const char* stateName(WiFiState value) {
 		switch (value) {
@@ -187,6 +226,7 @@ class WiFiManager {
 		scan_block_until = now + 15000;
 		logMessage("Attempting STA connection to SSID '%s' (%s)", ssid.c_str(), reason);
 		WiFi.mode(ap_mode ? WIFI_AP_STA : WIFI_STA);
+		applyStaNetworkConfig();
 		WiFi.begin(ssid.c_str(), pass.c_str());
 		transitionTo(WiFiState::STA_WAIT, now, reason);
 	}
@@ -294,6 +334,8 @@ public:
 		prefs.begin("wifi", false);
 		ssid = prefs.getString("ssid", "");
 		pass = prefs.getString("pass", "");
+		host_name = prefs.getString("host", "");
+		sta_ip = prefs.getString("ip", "");
 		prefs.end();
 
 		transitionTo(WiFiState::TRY_STA, millis(), "initial startup");
@@ -330,17 +372,24 @@ public:
 
 			ssid = req->getParam("ssid", true)->value();
 			pass = req->getParam("pass", true)->value();
+			host_name = req->hasParam("host", true) ? req->getParam("host", true)->value() : String();
+			sta_ip = req->hasParam("ip", true) ? req->getParam("ip", true)->value() : String();
+			host_name.trim();
+			sta_ip.trim();
 
 			prefs.begin("wifi", false);
 			prefs.putString("ssid", ssid);
 			prefs.putString("pass", pass);
+			prefs.putString("host", host_name);
+			prefs.putString("ip", sta_ip);
 			prefs.end();
 
-			logMessage("WiFi credentials updated for SSID '%s'. Starting reconnect.", ssid.c_str());
+			logMessage("WiFi settings updated for SSID '%s', host '%s', IP '%s'. Starting reconnect.",
+				ssid.c_str(), host_name.c_str(), sta_ip.c_str());
 			AsyncWebServerResponse* response = req->beginResponse(
 				200,
 				"text/html",
-				"<h1>Credentials saved.</h1><h2>Reconnecting to WiFi...</h2><p>You can close this page and return to the main UI.</p>");
+				"<h1>WiFi settings saved.</h1><h2>Reconnecting to WiFi...</h2><p>You can close this page and return to the main UI.</p>");
 			response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
 			response->addHeader("Pragma", "no-cache");
 			response->addHeader("Expires", "0");
@@ -527,13 +576,13 @@ public:
 	}
 
 	String renderConfigPage() {
-		return R"rawliteral(
+		String page = R"rawliteral(
 		<!DOCTYPE html>
 		<html lang="en">
 		<head>
 			<meta charset="UTF-8">
 			<meta name="viewport" content="width=device-width, initial-scale=1.0">
-			<title>WiFi Setup</title>
+			<title>Configure WiFi</title>
 			<style>
 				body {
 					font-family: sans-serif;
@@ -560,7 +609,7 @@ public:
 					margin-top: 1em;
 					font-weight: bold;
 				}
-				select, input[type="password"], input[type="submit"] {
+				select, input[type="password"], input[type="text"], input[type="submit"] {
 					width: 100%;
 					padding: 0.7em;
 					margin-top: 0.5em;
@@ -607,6 +656,12 @@ public:
 
 				<label for="pass">Password:</label>
 				<input type="password" name="pass" id="pass" autocomplete="new-password">
+
+				<label for="host">Host name:</label>
+				<input type="text" name="host" id="host" value="%HOST_NAME%" placeholder="ecoplug" autocomplete="off">
+
+				<label for="ip">IP address:</label>
+				<input type="text" name="ip" id="ip" value="%STA_IP%" placeholder="Leave blank for DHCP" inputmode="decimal" autocomplete="off">
 
 				<input type="submit" value="Save & Reconnect">
 			</form>
@@ -660,5 +715,8 @@ public:
 		</body>
 		</html>
 		)rawliteral";
+		page.replace("%HOST_NAME%", host_name);
+		page.replace("%STA_IP%", sta_ip);
+		return page;
 	}
 };
