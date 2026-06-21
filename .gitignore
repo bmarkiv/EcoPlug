@@ -4,3 +4,4 @@
 .vscode/launch.json
 .vscode/ipch
 index_html_gz.h
+platformio.ini
