@@ -140,6 +140,18 @@ class WiFiManager {
 			last_wifi_status = current_status;
 		}
 
+		if (current_status == WL_CONNECTED) {
+			disconnect_detected_at = 0;
+			sta_attempt_in_progress = false;
+			if (ap_mode && state != WiFiState::STA_WAIT) {
+				logMessage("STA reconnected while AP recovery was active. Restoring STA-only mode.");
+				if (start_web_server) start_web_server();
+				stopAP();
+				transitionTo(WiFiState::BOOT, now, "runtime STA reconnect");
+			}
+			return;
+		}
+
 		if (state == WiFiState::BOOT && current_status != WL_CONNECTED) {
 			if (disconnect_detected_at == 0) {
 				disconnect_detected_at = now;
@@ -153,9 +165,6 @@ class WiFiManager {
 			} else {
 				transitionTo(WiFiState::START_AP, now, "runtime STA disconnect");
 			}
-		} else if (current_status == WL_CONNECTED) {
-			disconnect_detected_at = 0;
-			sta_attempt_in_progress = false;
 		}
 	}
 
@@ -235,7 +244,6 @@ class WiFiManager {
 			return;
 		}
 		logMessage("Starting AP");
-		server.reset();
 		WiFi.mode(WIFI_AP_STA);
 		IPAddress ap_ip;
 		if (!ap_ip.fromString(WiFiConfig::kApIp)) {
@@ -255,46 +263,11 @@ class WiFiManager {
 		logMessage("Captive portal: http://%s", WiFiConfig::kApIp);
 		ap_mode = true;
 		ap_start = millis();
-
-		server.on("/", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-		server.on("/refill", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-		server.on("/refill/", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-		registerSetupRoutes();
-		registerResetWiFi();
-		server.on("/restart", HTTP_GET, [](AsyncWebServerRequest* req) {
-			req->send(200, "text/plain", "Restarting...");
-			delay(500);
-			ESP.restart();
-		});
-		server.on("/generate_204", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-		server.on("/hotspot-detect.html", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-		server.on("/connecttest.txt", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-		server.on("/ncsi.txt", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-		server.onNotFound([this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-
-		server.begin();
 		logMessage("AP web server started");
 	}
 
 	void stopAP() {
 		logMessage("Stopping AP");
-		server.reset();
 		WiFi.softAPdisconnect(true);
 		if (WiFi.status() == WL_CONNECTED) {
 			WiFi.mode(WIFI_STA);
@@ -332,6 +305,8 @@ public:
 	}
 
 	void setLogger(LogFn log_fn) { logger = log_fn; }
+
+	bool isApMode() const { return ap_mode; }
 
 	String getWiFiOptions() {
 		if (!scan_requested && !scanCache.success) {
@@ -374,6 +349,21 @@ public:
 			sta_attempt_in_progress = false;
 			scan_requested = false;
 			transitionTo(WiFiState::TRY_STA, millis(), "credentials updated via web UI");
+		});
+	}
+
+	void registerPortalRoutes() {
+		server.on("/generate_204", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderConfigPage());
+		});
+		server.on("/hotspot-detect.html", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderConfigPage());
+		});
+		server.on("/connecttest.txt", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderConfigPage());
+		});
+		server.on("/ncsi.txt", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderConfigPage());
 		});
 	}
 

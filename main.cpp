@@ -71,7 +71,9 @@ void send_websocket_heartbeat(unsigned long now_ms);
 void app_log(const char* format, ...);
 
 AsyncWebServer server(80);
-WiFiManager WiFiManager(server);
+WiFiManager wifiManager(server);
+static bool http_server_initialized = false;
+static bool ota_initialized = false;
 
 // -------------------- Logging --------------------
 void app_log(const char* format, ...) {
@@ -532,38 +534,68 @@ void serve_index(AsyncWebServerRequest *request, const char *cache_control) {
 }
 
 void start_web_server() {
-    server.reset();
-    // /refill must not be cached so the browser sees its pathname and picks the right WS.
-    server.on("/refill", HTTP_GET, [](AsyncWebServerRequest *r) { serve_index(r, "no-store"); });
-    server.on("/refill/", HTTP_GET, [](AsyncWebServerRequest *r) { serve_index(r, "no-store"); });
-    server.on("/",       HTTP_GET, [](AsyncWebServerRequest *r) { serve_index(r, "max-age=86400"); });
-    WiFiManager.registerSetupRoutes();
-    WiFiManager.registerResetWiFi();
-    server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *req) {
-        req->send(200, "text/plain", "Restarting...");
-        delay(500);
-        ESP.restart();
-    });
-    server.onNotFound(handleNotFound);
-    server.addHandler(&ws_filter);
-    server.addHandler(&ws_refill);
+    if (!http_server_initialized) {
+        // /refill must not be cached so the browser sees its pathname and picks the right WS.
+        server.on("/refill", HTTP_GET, [](AsyncWebServerRequest *r) {
+            if (wifiManager.isApMode()) {
+                r->send(200, "text/html", wifiManager.renderConfigPage());
+                return;
+            }
+            serve_index(r, "no-store");
+        });
+        server.on("/refill/", HTTP_GET, [](AsyncWebServerRequest *r) {
+            if (wifiManager.isApMode()) {
+                r->send(200, "text/html", wifiManager.renderConfigPage());
+                return;
+            }
+            serve_index(r, "no-store");
+        });
+        server.on("/", HTTP_GET, [](AsyncWebServerRequest *r) {
+            if (wifiManager.isApMode()) {
+                r->send(200, "text/html", wifiManager.renderConfigPage());
+                return;
+            }
+            serve_index(r, "max-age=86400");
+        });
+        wifiManager.registerSetupRoutes();
+        wifiManager.registerResetWiFi();
+        wifiManager.registerPortalRoutes();
+        server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *req) {
+            req->send(200, "text/plain", "Restarting...");
+            delay(500);
+            ESP.restart();
+        });
+        server.onNotFound([](AsyncWebServerRequest *request) {
+            if (wifiManager.isApMode()) {
+                request->send(200, "text/html", wifiManager.renderConfigPage());
+                return;
+            }
+            handleNotFound(request);
+        });
+        ws_filter.onEvent(onFilterEvent);
+        ws_refill.onEvent(onRefillEvent);
+        server.addHandler(&ws_filter);
+        server.addHandler(&ws_refill);
+        http_server_initialized = true;
+    }
+
     server.begin();
     app_log("HTTP server started");
 
-    ws_filter.onEvent(onFilterEvent);
-    ws_refill.onEvent(onRefillEvent);
-
-    ArduinoOTA.onStart([]() {
-        switch_state(false);
-        String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
-        app_log("Start updating %s", type.c_str());
-    });
-    ArduinoOTA.onEnd([]() {
-        app_log("OTA update finished—restarting now");
-        ESP.restart();
-    });
-    ArduinoOTA.begin();
-    app_log("OTA service started");
+    if (!ota_initialized) {
+        ArduinoOTA.onStart([]() {
+            switch_state(false);
+            String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+            app_log("Start updating %s", type.c_str());
+        });
+        ArduinoOTA.onEnd([]() {
+            app_log("OTA update finished—restarting now");
+            ESP.restart();
+        });
+        ArduinoOTA.begin();
+        ota_initialized = true;
+        app_log("OTA service started");
+    }
 }
 
 // -------------------- Main Loop --------------------
@@ -571,11 +603,11 @@ void setup(void) {
     ws_msg.reserve(256);
     setup_io();
     Serial.begin(115200);
-    WiFiManager.setLogger(app_log);
+    wifiManager.setLogger(app_log);
     load_channel_schedule(filter_ch);
     load_channel_schedule(refill_ch);
     load_timezone();
-    WiFiManager.begin(start_web_server);
+    wifiManager.begin(start_web_server);
 }
 
 void loop(void) {
@@ -585,7 +617,7 @@ void loop(void) {
         ArduinoOTA.handle();
         ws_filter.cleanupClients();
         ws_refill.cleanupClients();
-        WiFiManager.handle();
+        wifiManager.handle();
     }
 
     auto now = millis();
