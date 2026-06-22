@@ -303,41 +303,7 @@ class WiFiManager {
         return true;
     }
 
-	ScanResult scanWiFi() {
-		ScanResult result;
-		logMessage("scanWiFi: started...");
-		logMessage("scanWiFi: WiFi.mode(WIFI_STA)");
-		WiFi.mode(WIFI_STA);
-		if (WiFi.status() != WL_CONNECTED){
-			logMessage("scanWiFi: WiFi.disconnect...");
-			WiFi.disconnect(false, false);
-		}
-		logMessage("scanWiFi: WiFi.scanNetworks()");
-		int count = WiFi.scanNetworks();
-		if (count <= 0) {
-			logMessage("scanWiFi failed (%d)", count);
-			return result;
-		}
-		logMessage("scanWiFi completed: %d networks", count);
-		std::vector<int> indices(count);
-		for (int i = 0; i < count; ++i) indices[i] = i;
-		std::sort(indices.begin(), indices.end(), [](int a, int b) { return WiFi.RSSI(a) > WiFi.RSSI(b); });
-		for (int i : indices) {
-			String found = WiFi.SSID(i);
-			String bssid = WiFi.BSSIDstr(i);
-			int rssi = WiFi.RSSI(i);
-			logMessage("Found SSID '%s' [%s] (%d dBm)", found.c_str(), bssid.c_str(), rssi);
-			if (!found.length()) continue;
-			result.ssids.push_back(found);
-			result.bssids.push_back(bssid);
-			result.rssis.push_back(rssi);
-		}
-		result.success = true;
-		return result;
-	}
-
 	void startAP(unsigned long now, const char* reason) {
-		scanCache = scanWiFi();
 		logMessage("Starting AP");
 		WiFi.mode(WIFI_AP);
 		if (!ap_ip.fromString(WiFiConfig::kApIp)) {
@@ -419,20 +385,30 @@ public:
 	void registerSetupRoutes() {
 		server.on("/scan", HTTP_GET, [this](AsyncWebServerRequest* req) {
 			if (!scan_in_progress) {
+				if (scanCache.success) {
+					req->send(200, "text/plain", getWiFiOptions());
+					return;
+				}
+				logMessage("scan started");
 				scan_in_progress = true;
 				WiFi.scanDelete();
 				WiFi.scanNetworks(true, false, false, 0);
-				scanCache.success = false;
 				req->send(202, "text/plain", "scan started");
 				return;
 			}
-			if (WiFi.scanComplete() == WIFI_SCAN_RUNNING) {
+
+			int status = WiFi.scanComplete();
+			if (status == WIFI_SCAN_RUNNING || status == WIFI_SCAN_FAILED) {
+				logMessage("scan in progress");
 				req->send(202, "text/plain", "scan in progress");
 				return;
 			}
-			int count = WiFi.scanComplete();
+
+			int count = status;
 			scan_in_progress = false;
 			if (count <= 0) {
+				logMessage("Scan failed, count=%d", count);
+				scanCache = ScanResult();
 				req->send(200, "text/plain", "<option disabled>Scan failed</option>");
 				return;
 			}
@@ -671,7 +647,6 @@ public:
 		<body>
 			<h2>Configure WiFi</h2>
 			<form method="POST" action="/config">
-				<div style="margin-bottom:0.75em; font-size:0.95em; color:#666;">Scanning for nearby networks...</div>
 				<label for="ssidList">SSID:</label>
 				<select name="ssid" id="ssidList">
 					%SSID_OPTIONS%
@@ -694,19 +669,21 @@ public:
 			</div>
 			<script>
 				const refreshScan = () => {
-					fetch('/scan', { cache: 'no-store' }).catch(() => {});
 					const poll = setInterval(() => {
 						fetch('/scan', { cache: 'no-store' })
 							.then((r) => r.text())
 							.then((html) => {
-								if (!html.includes('Scan failed') && !html.includes('scan started')) {
+								if (html.includes('<option')) {
 									const list = document.getElementById('ssidList');
 									if (list) list.innerHTML = html;
+									clearInterval(poll);
+								} else if (!html.includes('scan in progress') && !html.includes('scan started')) {
 									clearInterval(poll);
 								}
 							})
 							.catch(() => {});
 					}, 800);
+					fetch('/scan', { cache: 'no-store' }).catch(() => {});
 				};
 				refreshScan();
 			</script>
