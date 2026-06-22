@@ -581,114 +581,191 @@ public:
 		String initial_options = renderWiFiOptions();
 		if (!initial_options.length()) initial_options = "<option disabled>Loading networks...</option>";
 		String page = R"rawliteral(
-		<!DOCTYPE html>
-		<html lang="en">
-		<head>
-			<meta charset="UTF-8">
-			<meta name="viewport" content="width=device-width, initial-scale=1.0">
-			<title>Configure WiFi</title>
-			<style>
-				body {
-					font-family: sans-serif;
-					margin: 0;
-					padding: 1.5em;
-					max-width: 600px;
-					margin-left: auto;
-					margin-right: auto;
-					background-color: #f8f8f8;
-				}
-				h2 {
-					margin-top: 0;
-					font-size: 1.5em;
-					text-align: center;
-				}
-				form {
-					background: #fff;
-					padding: 1em;
-					border-radius: 8px;
-					box-shadow: 0 0 10px rgba(0,0,0,0.05);
-				}
-				label {
-					display: block;
-					margin-top: 1em;
-					font-weight: bold;
-				}
-				select, input[type="password"], input[type="text"], input[type="submit"] {
-					width: 100%;
-					padding: 0.7em;
-					margin-top: 0.5em;
-					font-size: 1em;
-					border-radius: 4px;
-					border: 1px solid #ccc;
-					box-sizing: border-box;
-				}
-				input[type="submit"] {
-					background-color: #007bff;
-					color: white;
-					border: none;
-					cursor: pointer;
-				}
-				.actions {
-					margin-top: 1rem;
-					display: flex;
-					justify-content: center;
-				}
-				.button-link {
-					display: inline-block;
-					padding: 0.7em 1em;
-					border-radius: 4px;
-					background: #b00;
-					color: #fff;
-					text-decoration: none;
-					text-align: center;
-				}
-			</style>
-		</head>
-		<body>
-			<h2>Configure WiFi</h2>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Configure WiFi</title>
+	<style>
+		body {
+			font-family: Arial, Helvetica, Sans-Serif;
+			margin: 0;
+			padding: 20px;
+			display: flex;
+			justify-content: center;
+		}
+		.panel {
+			width: min(640px, 100%);
+			border-radius: 14px;
+			padding: 18px;
+			box-sizing: border-box;
+		}
+		.section {
+			padding: 14px;
+			border-radius: 10px;
+			margin-bottom: 14px;
+			background: rgba(127, 127, 127, 0.08);
+		}
+		h1,
+		h2,
+		h3 {
+			margin: 0 0 12px;
+		}
+		label {
+			display: block;
+			margin-bottom: 6px;
+			font-weight: 700;
+		}
+		select,
+		input[type="password"],
+		input[type="text"] {
+			width: 100%;
+			padding: 10px;
+			font-size: 0.95rem;
+			border-radius: 8px;
+			border: 1px solid #3a4551;
+			box-sizing: border-box;
+			background: #232a31;
+			color: #e5e7eb;
+		}
+		select {
+			min-height: 44px;
+		}
+		input::placeholder {
+			color: #9ca3af;
+		}
+		.form-row {
+			margin-bottom: 14px;
+		}
+		.primary,
+		.secondary {
+			padding: 10px 14px;
+			border-radius: 10px;
+			font-size: 0.95rem;
+			cursor: pointer;
+		}
+		.primary {
+			background: #0f766e;
+			color: #e5e7eb;
+			border: 1px solid #14b8a6;
+		}
+		.secondary {
+			background: #232a31;
+			color: #e5e7eb;
+			border: 1px solid #3a4551;
+			text-decoration: none;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+		}
+		.actions {
+			margin-top: 1rem;
+			display: flex;
+			justify-content: center;
+		}
+		@media (prefers-color-scheme: light) {
+			body {
+				background-color: #f4f7fb;
+				color: #10243b;
+			}
+			.panel {
+				background: #ffffff;
+				box-shadow: 0 10px 30px rgba(16, 36, 59, 0.08);
+			}
+			.section {
+				background: rgba(16, 36, 59, 0.04);
+			}
+			select,
+			input[type="password"],
+			input[type="text"] {
+				background: #fff;
+				color: #10243b;
+				border-color: #c9d5e3;
+			}
+			input::placeholder {
+				color: #4f647a;
+			}
+			.secondary {
+				background: #fff;
+				color: #10243b;
+				border-color: #c9d5e3;
+			}
+		}
+		@media (prefers-color-scheme: dark) {
+			body {
+				background-color: #111315;
+				color: #e5e7eb;
+			}
+			.panel {
+				background: #1b2025;
+				box-shadow: 0 0 0 1px #2b3138;
+			}
+			.secondary {
+				background: #232a31;
+				color: #e5e7eb;
+				border-color: #3a4551;
+			}
+		}
+	</style>
+</head>
+<body>
+	<div class="panel">
+		<h2>Configure WiFi</h2>
+		<div class="section">
 			<form method="POST" action="/config">
-				<label for="ssidList">SSID:</label>
-				<select name="ssid" id="ssidList">
-					%SSID_OPTIONS%
-				</select>
+				<div class="form-row">
+					<label for="ssidList">SSID</label>
+					<select name="ssid" id="ssidList">
+						%SSID_OPTIONS%
+					</select>
+				</div>
 
-				<label for="pass">Password:</label>
-				<input type="password" name="pass" id="pass" autocomplete="new-password">
+				<div class="form-row">
+					<label for="pass">Password</label>
+					<input type="password" name="pass" id="pass" autocomplete="new-password">
+				</div>
 
-				<label for="host">Host name:</label>
-				<input type="text" name="host" id="host" value="%HOST_NAME%" placeholder="ecoplug" autocomplete="off">
+				<div class="form-row">
+					<label for="host">Host name</label>
+					<input type="text" name="host" id="host" value="%HOST_NAME%" placeholder="ecoplug" autocomplete="off">
+				</div>
 
-				<label for="ip">IP address:</label>
-				<input type="text" name="ip" id="ip" value="%STA_IP%" placeholder="Leave blank for DHCP" inputmode="decimal" autocomplete="off">
+				<div class="form-row">
+					<label for="ip">IP address</label>
+					<input type="text" name="ip" id="ip" value="%STA_IP%" placeholder="Leave blank for DHCP" inputmode="decimal" autocomplete="off">
+				</div>
 
-				<input type="submit" value="Save & Reboot">
+				<button type="submit" class="primary">Save & Reboot</button>
 			</form>
+		</div>
 
-			<div class="actions">
-				<a href="/clear" class="button-link">Clear Preferences</a>
-			</div>
-			<script>
-				const refreshScan = () => {
-					const poll = setInterval(() => {
-						fetch('/scan', { cache: 'no-store' })
-							.then((r) => r.text())
-							.then((html) => {
-								if (html.includes('<option')) {
-									const list = document.getElementById('ssidList');
-									if (list) list.innerHTML = html;
-									clearInterval(poll);
-								} else if (!html.includes('scan in progress') && !html.includes('scan started')) {
-									clearInterval(poll);
-								}
-							})
-							.catch(() => {});
-					}, 800);
-					fetch('/scan', { cache: 'no-store' }).catch(() => {});
-				};
-				refreshScan();
-			</script>
-		</body>
-		</html>
+		<div class="actions">
+			<a href="/clear" class="secondary">Clear Preferences</a>
+		</div>
+	</div>
+	<script>
+		const refreshScan = () => {
+			const poll = setInterval(() => {
+				fetch('/scan', { cache: 'no-store' })
+					.then((r) => r.text())
+					.then((html) => {
+						if (html.includes('<option')) {
+							const list = document.getElementById('ssidList');
+							if (list) list.innerHTML = html;
+							clearInterval(poll);
+						} else if (!html.includes('scan in progress') && !html.includes('scan started')) {
+							clearInterval(poll);
+						}
+					})
+					.catch(() => {});
+			}, 800);
+			fetch('/scan', { cache: 'no-store' }).catch(() => {});
+		};
+		refreshScan();
+	</script>
+</body>
+</html>
 		)rawliteral";
 		page.replace("%SSID_OPTIONS%", initial_options);
 		page.replace("%HOST_NAME%", host_name);
