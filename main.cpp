@@ -591,17 +591,6 @@ void start_web_server() {
     }
 }
 
-void register_ap_routes() {
-    wifiManager.registerSetupRoutes();
-    wifiManager.registerResetWiFi();
-    wifiManager.registerPortalRoutes();
-    server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *req) {
-        req->send(200, "text/plain", "Restarting...");
-        delay(500);
-        ESP.restart();
-    });
-}
-
 // -------------------- Main Loop --------------------
 void setup(void) {
     ws_msg.reserve(256);
@@ -611,7 +600,7 @@ void setup(void) {
     load_channel_schedule(filter_ch);
     load_channel_schedule(refill_ch);
     load_timezone();
-    wifiManager.begin(start_web_server, register_ap_routes);
+    wifiManager.begin(start_web_server);
 }
 
 void loop(void) {

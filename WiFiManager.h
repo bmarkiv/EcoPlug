@@ -33,11 +33,8 @@ class WiFiManager {
 	const char* ap_pass;
 	bool* server_initialized;
 	LogFn logger;
-	unsigned long state_started_at = 0;
 	unsigned long ap_started_at = 0;
-	unsigned long last_sta_ok_at = 0;
-	unsigned long disconnect_started_at = 0;
-	WiFiEventId_t wifi_event_id = 0;
+	unsigned long failover_started_at = 0;
 	WiFiState state = WiFiState::TRY_STA;
 	bool ap_mode = false;
 	bool scan_in_progress = false;
@@ -50,7 +47,6 @@ class WiFiManager {
 	IPAddress sta_local_ip;
 	bool sta_ip_valid = false;
 	IPAddress ap_ip;
-	void (*register_ap_routes)() = nullptr;
 	void (*start_web_server)() = nullptr;
 	ScanResult scanCache;
 
@@ -196,7 +192,23 @@ class WiFiManager {
 		if (state == nextState) return;
 		logMessage("State %s -> %s (%s)", stateName(state), stateName(nextState), reason);
 		state = nextState;
-		state_started_at = now;
+	}
+
+	bool handleStaLink(unsigned long now, const char* disconnect_reason) {
+		if (WiFi.status() == WL_CONNECTED) {
+			failover_started_at = 0;
+			return true;
+		}
+
+		if (failover_started_at == 0) {
+			failover_started_at = now;
+			return false;
+		}
+
+		if (now - failover_started_at >= WiFiConfig::sta_timeout) {
+			startAP(now, disconnect_reason);
+		}
+		return false;
 	}
 
     void loadPrefs() {
@@ -293,10 +305,14 @@ class WiFiManager {
 
 	ScanResult scanWiFi() {
 		ScanResult result;
-		logMessage("Preparing SSID scan before AP startup");
+		logMessage("scanWiFi: started...");
+		logMessage("scanWiFi: WiFi.mode(WIFI_STA)");
 		WiFi.mode(WIFI_STA);
-		// WiFi.disconnect(false, false);
-		logMessage("scanWiFi started");
+		if (WiFi.status() != WL_CONNECTED){
+			logMessage("scanWiFi: WiFi.disconnect...");
+			WiFi.disconnect(false, false);
+		}
+		logMessage("scanWiFi: WiFi.scanNetworks()");
 		int count = WiFi.scanNetworks();
 		if (count <= 0) {
 			logMessage("scanWiFi failed (%d)", count);
@@ -340,7 +356,7 @@ class WiFiManager {
 		server.on("/", HTTP_GET, [this](AsyncWebServerRequest* req) {
 			req->send(200, "text/html", renderConfigPage());
 		});
-		if (register_ap_routes) register_ap_routes();
+		register_ap_routes();
 		server.onNotFound([this](AsyncWebServerRequest* req) {
 			req->send(200, "text/html", renderConfigPage());
 		});
@@ -356,6 +372,17 @@ class WiFiManager {
 		setState(WiFiState::AP_ACTIVE, now, reason);
 	}
 
+	void register_ap_routes() {
+		registerSetupRoutes();
+		registerResetWiFi();
+		registerPortalRoutes();
+		server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *req) {
+			req->send(200, "text/plain", "Restarting...");
+			delay(500);
+			ESP.restart();
+		});
+	}
+
 public:
 	WiFiManager(AsyncWebServer& srv,
 				 const char* apSSID = WiFiConfig::kApSsid,
@@ -368,15 +395,12 @@ public:
 		  server_initialized(server_initialized_flag),
 		  logger(log_fn) {}
 
-	void begin(void (*start_web_server_fn)() = nullptr,
-		       void (*register_ap_routes_fn)() = nullptr) {
+	void begin(void (*start_web_server_fn)() = nullptr) {
 		start_web_server = start_web_server_fn;
-		register_ap_routes = register_ap_routes_fn;
-		wifi_event_id = WiFi.onEvent([this](arduino_event_id_t event, arduino_event_info_t info) {
+		WiFi.onEvent([this](arduino_event_id_t event, arduino_event_info_t info) {
 			logWiFiEvent(event, info);
 		});
 		loadPrefs();
-		state_started_at = millis();
 		state = WiFiState::TRY_STA;
 	}
 
@@ -536,36 +560,18 @@ public:
 				break;
 
 			case WiFiState::STA_WAIT:
-				if (WiFi.status() == WL_CONNECTED) {
-					last_sta_ok_at = now;
-					disconnect_started_at = 0;
+				if (handleStaLink(now, "STA timeout")) {
 					logMessage("STA connected. IP: %s, BSSID: %s, RSSI: %d dBm",
 						WiFi.localIP().toString().c_str(),
 						WiFi.BSSIDstr().c_str(),
 						WiFi.RSSI());
 					if (start_web_server) start_web_server();
 					setState(WiFiState::STA_CONNECTED, now, "STA connected");
-				} else if (now - state_started_at > WiFiConfig::sta_timeout) {
-					startAP(now, "STA timeout");
 				}
 				break;
 
 			case WiFiState::STA_CONNECTED:
-				if (WiFi.status() == WL_CONNECTED) {
-					last_sta_ok_at = now;
-					disconnect_started_at = 0;
-					break;
-				}
-				if (last_sta_ok_at != 0 && now - last_sta_ok_at < 30000) {
-					break;
-				}
-				if (!ap_mode && disconnect_started_at == 0) {
-					disconnect_started_at = now;
-					break;
-				}
-				if (!ap_mode && now - disconnect_started_at >= 5000) {
-					startAP(now, "runtime STA disconnect");
-				}
+				handleStaLink(now, "runtime STA disconnect");
 				break;
 
 			case WiFiState::AP_ACTIVE:
