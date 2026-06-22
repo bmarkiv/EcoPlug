@@ -1,5 +1,6 @@
 #pragma once
 
+#include <DNSServer.h>
 #include <ESPAsyncWebServer.h>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -11,14 +12,10 @@
 #include "WiFiConfig.h"
 
 enum class WiFiState {
-	BOOT,
 	TRY_STA,
 	STA_WAIT,
-	STA_FAIL,
-	START_AP,
-	AP_ACTIVE,
-	AP_IDLE,
-	AP_STOP
+	STA_CONNECTED,
+	AP_ACTIVE
 };
 
 class WiFiManager {
@@ -34,118 +31,32 @@ class WiFiManager {
 	AsyncWebServer& server;
 	const char* ap_ssid;
 	const char* ap_pass;
+	bool* server_initialized;
 	LogFn logger;
-	unsigned long retry_interval;
-	unsigned long ap_timeout;
-	unsigned long last_scan = 0;
-	unsigned long ap_start = 0;
-	unsigned long state_start = 0;
-	unsigned long disconnect_detected_at = 0;
-	unsigned long last_sta_attempt = 0;
-	unsigned long scan_block_until = 0;
-	WiFiState state = WiFiState::BOOT;
+	unsigned long state_started_at = 0;
+	unsigned long ap_started_at = 0;
+	unsigned long last_sta_ok_at = 0;
+	unsigned long disconnect_started_at = 0;
+	WiFiEventId_t wifi_event_id = 0;
+	WiFiState state = WiFiState::TRY_STA;
 	bool ap_mode = false;
-	bool sta_attempt_in_progress = false;
-	bool scan_requested = false;
-	wl_status_t last_wifi_status = WL_IDLE_STATUS;
+	bool scan_in_progress = false;
 	Preferences prefs;
+	DNSServer dnsServer;
 	String ssid;
 	String pass;
 	String host_name;
 	String sta_ip;
+	IPAddress sta_local_ip;
+	bool sta_ip_valid = false;
+	IPAddress ap_ip;
+	void (*register_ap_routes)() = nullptr;
 	void (*start_web_server)() = nullptr;
 	ScanResult scanCache;
 
 	static bool parseIPv4(const String& value, IPAddress& out) {
 		if (!value.length()) return false;
 		return out.fromString(value);
-	}
-
-	void applyStaNetworkConfig() {
-		String trimmed_host = host_name;
-		trimmed_host.trim();
-		if (trimmed_host.length()) {
-			WiFi.setHostname(trimmed_host.c_str());
-			logMessage("Using STA host name '%s'", trimmed_host.c_str());
-		}
-
-		String trimmed_ip = sta_ip;
-		trimmed_ip.trim();
-		if (!trimmed_ip.length()) {
-			WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
-			logMessage("Using DHCP for STA IP");
-			return;
-		}
-
-		IPAddress local_ip;
-		if (!parseIPv4(trimmed_ip, local_ip)) {
-			logMessage("Invalid STA IP '%s'. Falling back to DHCP.", trimmed_ip.c_str());
-			WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
-			return;
-		}
-
-		IPAddress gateway(local_ip[0], local_ip[1], local_ip[2], 1);
-		IPAddress subnet(255, 255, 255, 0);
-		if (!WiFi.config(local_ip, gateway, subnet)) {
-			logMessage("WiFi.config failed for STA IP %s. Connection will continue.", trimmed_ip.c_str());
-		} else {
-			logMessage("Using STA IP %s (gateway %s)", trimmed_ip.c_str(), gateway.toString().c_str());
-		}
-	}
-
-	static const char* stateName(WiFiState value) {
-		switch (value) {
-			case WiFiState::BOOT:
-				return "BOOT";
-			case WiFiState::TRY_STA:
-				return "TRY_STA";
-			case WiFiState::STA_WAIT:
-				return "STA_WAIT";
-			case WiFiState::STA_FAIL:
-				return "STA_FAIL";
-			case WiFiState::START_AP:
-				return "START_AP";
-			case WiFiState::AP_ACTIVE:
-				return "AP_ACTIVE";
-			case WiFiState::AP_IDLE:
-				return "AP_IDLE";
-			case WiFiState::AP_STOP:
-				return "AP_STOP";
-		}
-		return "UNKNOWN";
-	}
-
-	static const char* wifiStatusName(wl_status_t value) {
-		switch (value) {
-			case WL_NO_SHIELD:
-				return "WL_NO_SHIELD";
-			case WL_IDLE_STATUS:
-				return "WL_IDLE_STATUS";
-			case WL_NO_SSID_AVAIL:
-				return "WL_NO_SSID_AVAIL";
-			case WL_SCAN_COMPLETED:
-				return "WL_SCAN_COMPLETED";
-			case WL_CONNECTED:
-				return "WL_CONNECTED";
-			case WL_CONNECT_FAILED:
-				return "WL_CONNECT_FAILED";
-			case WL_CONNECTION_LOST:
-				return "WL_CONNECTION_LOST";
-			case WL_DISCONNECTED:
-				return "WL_DISCONNECTED";
-		}
-		return "WL_UNKNOWN";
-	}
-
-	static const char* scanStatusName(int value) {
-		switch (value) {
-			case WIFI_SCAN_RUNNING:
-				return "WIFI_SCAN_RUNNING";
-			case WIFI_SCAN_FAILED:
-				return "WIFI_SCAN_FAILED";
-		}
-		if (value == 0) return "WIFI_SCAN_NO_RESULTS";
-		return "WIFI_SCAN_RESULT_COUNT";
 	}
 
 	void logMessage(const char* format, ...) {
@@ -161,207 +72,361 @@ class WiFiManager {
 		Serial.println(String("[WiFiManager] ") + buffer);
 	}
 
-	void transitionTo(WiFiState nextState, unsigned long now, const char* reason = nullptr) {
+	static const char* disconnectReasonName(uint8_t reason) {
+		switch (reason) {
+			case 1: return "UNSPECIFIED";
+			case 2: return "AUTH_EXPIRE";
+			case 3: return "AUTH_LEAVE";
+			case 4: return "ASSOC_EXPIRE";
+			case 5: return "ASSOC_TOOMANY";
+			case 6: return "NOT_AUTHED";
+			case 7: return "NOT_ASSOCED";
+			case 8: return "ASSOC_LEAVE";
+			case 9: return "ASSOC_NOT_AUTHED";
+			case 10: return "DISASSOC_PWRCAP_BAD";
+			case 11: return "DISASSOC_SUPCHAN_BAD";
+			case 13: return "IE_INVALID";
+			case 14: return "MIC_FAILURE";
+			case 15: return "4WAY_HANDSHAKE_TIMEOUT";
+			case 16: return "GROUP_KEY_UPDATE_TIMEOUT";
+			case 17: return "IE_IN_4WAY_DIFFERS";
+			case 18: return "GROUP_CIPHER_INVALID";
+			case 19: return "PAIRWISE_CIPHER_INVALID";
+			case 20: return "AKMP_INVALID";
+			case 21: return "UNSUPP_RSN_IE_VERSION";
+			case 22: return "INVALID_RSN_IE_CAP";
+			case 23: return "802_1X_AUTH_FAILED";
+			case 24: return "CIPHER_SUITE_REJECTED";
+			case 200: return "BEACON_TIMEOUT";
+			case 201: return "NO_AP_FOUND";
+			case 202: return "AUTH_FAIL";
+			case 203: return "ASSOC_FAIL";
+			case 204: return "HANDSHAKE_TIMEOUT";
+			default: return "UNKNOWN";
+		}
+	}
+
+	static const char* authModeName(wifi_auth_mode_t mode) {
+		switch (mode) {
+			case WIFI_AUTH_OPEN: return "OPEN";
+			case WIFI_AUTH_WEP: return "WEP";
+			case WIFI_AUTH_WPA_PSK: return "WPA_PSK";
+			case WIFI_AUTH_WPA2_PSK: return "WPA2_PSK";
+			case WIFI_AUTH_WPA_WPA2_PSK: return "WPA_WPA2_PSK";
+			case WIFI_AUTH_WPA2_ENTERPRISE: return "WPA2_ENTERPRISE";
+			case WIFI_AUTH_WPA3_PSK: return "WPA3_PSK";
+			case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA2_WPA3_PSK";
+			default: return "AUTH_UNKNOWN";
+		}
+	}
+
+	void logWiFiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+		switch (event) {
+			case ARDUINO_EVENT_WIFI_READY:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_READY");
+				break;
+			case ARDUINO_EVENT_WIFI_SCAN_DONE:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_SCAN_DONE");
+				break;
+			case ARDUINO_EVENT_WIFI_STA_START:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_STA_START");
+				break;
+			case ARDUINO_EVENT_WIFI_STA_STOP:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_STA_STOP");
+				break;
+			case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_STA_CONNECTED ssid='%s' channel=%d auth=%s",
+					reinterpret_cast<const char*>(info.wifi_sta_connected.ssid),
+					info.wifi_sta_connected.channel,
+					authModeName(static_cast<wifi_auth_mode_t>(info.wifi_sta_connected.authmode)));
+				break;
+			case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_STA_DISCONNECTED reason=%d(%s)",
+					info.wifi_sta_disconnected.reason,
+					disconnectReasonName(info.wifi_sta_disconnected.reason));
+				break;
+			case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE");
+				break;
+			case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_STA_GOT_IP ip=%s", IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
+				break;
+			case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_STA_LOST_IP");
+				break;
+			case ARDUINO_EVENT_WIFI_AP_START:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_AP_START");
+				break;
+			case ARDUINO_EVENT_WIFI_AP_STOP:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_AP_STOP");
+				break;
+			case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_AP_STACONNECTED aid=%d", info.wifi_ap_staconnected.aid);
+				break;
+			case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_AP_STADISCONNECTED aid=%d", info.wifi_ap_stadisconnected.aid);
+				break;
+			case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED");
+				break;
+			case ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED:
+				logMessage("WiFi event: ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED rssi=%d", info.wifi_ap_probereqrecved.rssi);
+				break;
+			default:
+				logMessage("WiFi event: %d", static_cast<int>(event));
+				break;
+		}
+	}
+
+	static const char* stateName(WiFiState value) {
+		switch (value) {
+			case WiFiState::TRY_STA:
+				return "TRY_STA";
+			case WiFiState::STA_WAIT:
+				return "STA_WAIT";
+			case WiFiState::STA_CONNECTED:
+				return "STA_CONNECTED";
+			case WiFiState::AP_ACTIVE:
+				return "AP_ACTIVE";
+		}
+		return "UNKNOWN";
+	}
+
+	void setState(WiFiState nextState, unsigned long now, const char* reason) {
 		if (state == nextState) return;
-		if (reason && reason[0] != '\0') {
-			logMessage("State %s -> %s (%s)", stateName(state), stateName(nextState), reason);
-		} else {
-			logMessage("State %s -> %s", stateName(state), stateName(nextState));
-		}
+		logMessage("State %s -> %s (%s)", stateName(state), stateName(nextState), reason);
 		state = nextState;
-		state_start = now;
+		state_started_at = now;
 	}
 
-	void monitorConnection(unsigned long now) {
-		wl_status_t current_status = WiFi.status();
-		if (current_status != last_wifi_status) {
-			logMessage("WiFi status %s -> %s", wifiStatusName(last_wifi_status), wifiStatusName(current_status));
-			last_wifi_status = current_status;
-		}
+    void loadPrefs() {
+        prefs.begin("wifi", false);
 
-		if (current_status == WL_CONNECTED) {
-			disconnect_detected_at = 0;
-			sta_attempt_in_progress = false;
-			if (ap_mode && state != WiFiState::STA_WAIT) {
-				logMessage("STA reconnected while AP recovery was active. Restoring STA-only mode.");
-				if (start_web_server) start_web_server();
-				stopAP();
-				transitionTo(WiFiState::BOOT, now, "runtime STA reconnect");
-			}
-			return;
-		}
+        ssid      = prefs.getString("ssid", "");
+        pass      = prefs.getString("pass", "");
+        host_name = prefs.getString("host", "");
+        sta_ip    = prefs.getString("ip", "");
 
-		if (state == WiFiState::BOOT && current_status != WL_CONNECTED) {
-			if (disconnect_detected_at == 0) {
-				disconnect_detected_at = now;
-				logMessage("STA disconnected while running. Starting recovery.");
-			}
-			if (ap_mode) {
-				if (!sta_attempt_in_progress && now - last_sta_attempt >= retry_interval) {
-					transitionTo(WiFiState::TRY_STA, now, "periodic retry while disconnected");
-					disconnect_detected_at = 0;
-				}
-			} else {
-				transitionTo(WiFiState::START_AP, now, "runtime STA disconnect");
-			}
-		}
-	}
+        prefs.end();
 
-	bool shouldRefreshScan(unsigned long now) const {
-		if (sta_attempt_in_progress || now < scan_block_until) return false;
-		if (scan_requested) return true;
-		if (!ap_mode) return false;
-		if (!scanCache.success) return now - last_scan > 5000;
-		return now - last_scan >= 120000;
-	}
+        // Normalize
+        ssid.trim();
+        pass.trim();
+        host_name.trim();
+        sta_ip.trim();
 
-	void beginStaAttempt(unsigned long now, const char* reason) {
-		if (!ssid.length()) {
-			logMessage("No credentials. Skipping STA attempt.");
-			transitionTo(WiFiState::START_AP, now, "STA credentials unavailable");
-			return;
-		}
-		last_sta_attempt = now;
-		sta_attempt_in_progress = true;
-		scan_block_until = now + 15000;
-		logMessage("Attempting STA connection to SSID '%s' (%s)", ssid.c_str(), reason);
-		WiFi.mode(ap_mode ? WIFI_AP_STA : WIFI_STA);
-		applyStaNetworkConfig();
-		WiFi.begin(ssid.c_str(), pass.c_str());
-		transitionTo(WiFiState::STA_WAIT, now, reason);
-	}
+        // Parse static IP
+        sta_ip_valid = parseIPv4(sta_ip, sta_local_ip);
 
-	void prepareScan(unsigned long now) {
-		if (WiFi.status() == WL_CONNECTED && !ap_mode) {
-			logMessage("Preparing SSID refresh while STA connected");
-			WiFi.mode(WIFI_STA);
-			scan_block_until = now + 2000;
-			return;
-		}
-		logMessage("Preparing SSID refresh: clearing stale STA state before scan");
-		WiFi.mode(WIFI_AP_STA);
-		WiFi.disconnect(false, false);
-		sta_attempt_in_progress = false;
-		last_wifi_status = WiFi.status();
-		last_sta_attempt = now;
-		scan_block_until = now + 2000;
-	}
+        // Logging moved here
+        logMessage("Loaded prefs:");
+        logMessage("  SSID        = '%s'", ssid.c_str());
+        // logMessage("  PASS        = '%s'", pass.c_str());
+		logMessage("  PASS length = '%d'", pass.length());
+        logMessage("  HOST        = '%s'", host_name.c_str());
+        logMessage("  STA_IP      = '%s' (%s)",
+                sta_ip.c_str(),
+                sta_ip_valid ? "valid" : "invalid");
+    }
+
+    bool beginSta(unsigned long now, const char* reason) {
+        if (!ssid.length()) {
+            logMessage("No saved credentials");
+            return false;
+        }
+
+        logMessage("Attempting STA connection to SSID '%s' (%s)",
+                ssid.c_str(), reason);
+
+        // --- WiFi.mode() ---
+        bool mode_ok = WiFi.mode(WIFI_STA);
+        logMessage("WiFi.mode(WIFI_STA) -> %s", mode_ok ? "OK" : "FAIL");
+        if (!mode_ok) return false;
+
+        // --- Hostname ---
+        if (host_name.length()) {
+            bool host_ok = WiFi.setHostname(host_name.c_str());
+            logMessage("WiFi.setHostname('%s') -> %s",
+                    host_name.c_str(),
+                    host_ok ? "OK" : "FAIL");
+            if (!host_ok) return false;
+        }
+
+        // --- IP configuration ---
+        if (!sta_ip.length() || !sta_ip_valid) {
+            if (!sta_ip.length())
+                logMessage("Using DHCP for STA IP");
+            else
+                logMessage("Invalid STA IP '%s'. Falling back to DHCP.", sta_ip.c_str());
+
+            bool cfg_ok = WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
+            logMessage("WiFi.config(DHCP) -> %s", cfg_ok ? "OK" : "FAIL");
+            if (!cfg_ok) return false;
+        } else {
+            IPAddress gateway(sta_local_ip[0], sta_local_ip[1], sta_local_ip[2], 1);
+            IPAddress subnet(255, 255, 255, 0);
+
+            bool cfg_ok = WiFi.config(sta_local_ip, gateway, subnet);
+            logMessage("WiFi.config(%s, gateway %s) -> %s",
+                    sta_ip.c_str(),
+                    gateway.toString().c_str(),
+                    cfg_ok ? "OK" : "FAIL");
+            if (!cfg_ok) return false;
+        }
+
+        // --- WiFi.begin() ---
+        wl_status_t st = WiFi.begin(ssid.c_str(), pass.c_str());
+        logMessage("WiFi.begin('%s') -> wl_status_t %d",
+                ssid.c_str(), (int)st);
+
+        // If begin() fails immediately, return false
+        if (st == WL_CONNECT_FAILED ||
+            st == WL_NO_SSID_AVAIL ||
+            st == WL_IDLE_STATUS) {
+            return false;
+        }
+
+        // Otherwise STA is starting — caller will wait for events
+        setState(WiFiState::STA_WAIT, now, reason);
+        return true;
+    }
 
 	ScanResult scanWiFi() {
 		ScanResult result;
-		if (sta_attempt_in_progress) {
-			logMessage("Skipping SSID refresh while STA attempt is in progress");
-			return scanCache;
-		}
-		unsigned long now = millis();
-		prepareScan(now);
+		logMessage("Preparing SSID scan before AP startup");
+		WiFi.mode(WIFI_STA);
+		// WiFi.disconnect(false, false);
 		logMessage("scanWiFi started");
-		int n = WiFi.scanNetworks();
-		if (n <= 0) {
-			logMessage("scanWiFi failed: %s (%d). Keeping previous scan cache.", scanStatusName(n), n);
-			return scanCache;
+		int count = WiFi.scanNetworks();
+		if (count <= 0) {
+			logMessage("scanWiFi failed (%d)", count);
+			return result;
 		}
-		logMessage("scanWiFi completed: %d networks", n);
-		std::vector<int> indices(n);
-		for (int i = 0; i < n; ++i) indices[i] = i;
+		logMessage("scanWiFi completed: %d networks", count);
+		std::vector<int> indices(count);
+		for (int i = 0; i < count; ++i) indices[i] = i;
 		std::sort(indices.begin(), indices.end(), [](int a, int b) { return WiFi.RSSI(a) > WiFi.RSSI(b); });
 		for (int i : indices) {
 			String found = WiFi.SSID(i);
 			String bssid = WiFi.BSSIDstr(i);
-			logMessage("Found SSID '%s' [%s] (%d dBm)", found.c_str(), bssid.c_str(), WiFi.RSSI(i));
-			if (found.length() == 0) continue;
+			int rssi = WiFi.RSSI(i);
+			logMessage("Found SSID '%s' [%s] (%d dBm)", found.c_str(), bssid.c_str(), rssi);
+			if (!found.length()) continue;
 			result.ssids.push_back(found);
 			result.bssids.push_back(bssid);
-			result.rssis.push_back(WiFi.RSSI(i));
+			result.rssis.push_back(rssi);
 		}
 		result.success = true;
 		return result;
 	}
 
-	void startAP() {
-		if (ap_mode) {
-			logMessage("AP already active. Preserving captive portal.");
-			return;
-		}
+	void startAP(unsigned long now, const char* reason) {
+		scanCache = scanWiFi();
 		logMessage("Starting AP");
-		WiFi.mode(WIFI_AP_STA);
-		IPAddress ap_ip;
+		WiFi.mode(WIFI_AP);
 		if (!ap_ip.fromString(WiFiConfig::kApIp)) {
-			logMessage("Invalid kApIp config, using 192.168.4.1");
 			ap_ip = IPAddress(192, 168, 4, 1);
 		}
 		IPAddress ap_gateway = ap_ip;
 		IPAddress ap_subnet;
 		if (!ap_subnet.fromString(WiFiConfig::kApSubnet)) {
-			logMessage("Invalid kApSubnet config, using 255.255.255.0");
 			ap_subnet = IPAddress(255, 255, 255, 0);
 		}
-		if (!WiFi.softAPConfig(ap_ip, ap_gateway, ap_subnet)) {
-			logMessage("softAPConfig failed, using defaults");
-		}
+		WiFi.softAPConfig(ap_ip, ap_gateway, ap_subnet);
 		WiFi.softAP(ap_ssid, ap_pass);
-		logMessage("Captive portal: http://%s", WiFiConfig::kApIp);
-		ap_mode = true;
-		ap_start = millis();
-		logMessage("AP web server started");
-	}
 
-	void stopAP() {
-		logMessage("Stopping AP");
-		WiFi.softAPdisconnect(true);
-		if (WiFi.status() == WL_CONNECTED) {
-			WiFi.mode(WIFI_STA);
-		}
-		ap_mode = false;
+		server.reset();
+		if (server_initialized) *server_initialized = false;
+		server.on("/", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderConfigPage());
+		});
+		if (register_ap_routes) register_ap_routes();
+		server.onNotFound([this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderConfigPage());
+		});
+		server.begin();
+
+		dnsServer.stop();
+		dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+		dnsServer.start(53, "*", ap_ip);
+		logMessage("Captive portal: http://%s", WiFiConfig::kApIp);
+		logMessage("AP web server started");
+		ap_mode = true;
+		ap_started_at = now;
+		setState(WiFiState::AP_ACTIVE, now, reason);
 	}
 
 public:
 	WiFiManager(AsyncWebServer& srv,
 				 const char* apSSID = WiFiConfig::kApSsid,
 				 const char* apPASS = WiFiConfig::kApPassword,
-				 LogFn log_fn = nullptr,
-				 unsigned long retry_ms = 60000,
-				 unsigned long ap_timeout_ms = 60000)
+				 bool* server_initialized_flag = nullptr,
+				 LogFn log_fn = nullptr)
 		: server(srv),
 		  ap_ssid(apSSID),
 		  ap_pass(apPASS),
-		  logger(log_fn),
-		  retry_interval(retry_ms),
-		  ap_timeout(ap_timeout_ms) {}
+		  server_initialized(server_initialized_flag),
+		  logger(log_fn) {}
 
-	void begin(void (*start_web_server_fn)() = nullptr) {
+	void begin(void (*start_web_server_fn)() = nullptr,
+		       void (*register_ap_routes_fn)() = nullptr) {
 		start_web_server = start_web_server_fn;
-		prefs.begin("wifi", false);
-		ssid = prefs.getString("ssid", "");
-		pass = prefs.getString("pass", "");
-		host_name = prefs.getString("host", "");
-		sta_ip = prefs.getString("ip", "");
-		prefs.end();
-
-		transitionTo(WiFiState::TRY_STA, millis(), "initial startup");
-		if (ssid.length()) {
-			beginStaAttempt(millis(), "initial startup");
-		} else {
-			transitionTo(WiFiState::START_AP, millis(), "no saved credentials");
-		}
+		register_ap_routes = register_ap_routes_fn;
+		wifi_event_id = WiFi.onEvent([this](arduino_event_id_t event, arduino_event_info_t info) {
+			logWiFiEvent(event, info);
+		});
+		loadPrefs();
+		state_started_at = millis();
+		state = WiFiState::TRY_STA;
 	}
 
 	void setLogger(LogFn log_fn) { logger = log_fn; }
 
 	bool isApMode() const { return ap_mode; }
 
+	void handleWifiRoute(AsyncWebServerRequest* req) {
+		req->send(200, "text/html", renderConfigPage());
+	}
+
 	String getWiFiOptions() {
-		if (!scan_requested && !scanCache.success) {
-			scan_requested = true;
-		}
 		return renderWiFiOptions();
 	}
 
 	void registerSetupRoutes() {
-		server.on("/wifi", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
 		server.on("/scan", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			if (!scan_in_progress) {
+				scan_in_progress = true;
+				WiFi.scanDelete();
+				WiFi.scanNetworks(true, false, false, 0);
+				scanCache.success = false;
+				req->send(202, "text/plain", "scan started");
+				return;
+			}
+			if (WiFi.scanComplete() == WIFI_SCAN_RUNNING) {
+				req->send(202, "text/plain", "scan in progress");
+				return;
+			}
+			int count = WiFi.scanComplete();
+			scan_in_progress = false;
+			if (count <= 0) {
+				req->send(200, "text/plain", "<option disabled>Scan failed</option>");
+				return;
+			}
+			ScanResult result;
+			std::vector<int> indices(count);
+			for (int i = 0; i < count; ++i) indices[i] = i;
+			std::sort(indices.begin(), indices.end(), [](int a, int b) { return WiFi.RSSI(a) > WiFi.RSSI(b); });
+			for (int i : indices) {
+				String found = WiFi.SSID(i);
+				String bssid = WiFi.BSSIDstr(i);
+				int rssi = WiFi.RSSI(i);
+				if (!found.length()) continue;
+				result.ssids.push_back(found);
+				result.bssids.push_back(bssid);
+				result.rssis.push_back(rssi);
+			}
+			result.success = true;
+			scanCache = result;
 			req->send(200, "text/plain", getWiFiOptions());
 		});
 		server.on("/config", HTTP_POST, [this](AsyncWebServerRequest* req) {
@@ -384,42 +449,31 @@ public:
 			prefs.putString("ip", sta_ip);
 			prefs.end();
 
-			logMessage("WiFi settings updated for SSID '%s', host '%s', IP '%s'. Starting reconnect.",
-				ssid.c_str(), host_name.c_str(), sta_ip.c_str());
 			AsyncWebServerResponse* response = req->beginResponse(
 				200,
 				"text/html",
-				"<h1>WiFi settings saved.</h1><h2>Reconnecting to WiFi...</h2><p>You can close this page and return to the main UI.</p>");
+				"<h1>WiFi settings saved.</h1><h2>Device will reboot now.</h2><p>Reconnect after reboot.</p>");
 			response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
 			response->addHeader("Pragma", "no-cache");
 			response->addHeader("Expires", "0");
 			req->send(response);
-			WiFi.disconnect(true, false);
-			sta_attempt_in_progress = false;
-			scan_requested = false;
-			transitionTo(WiFiState::TRY_STA, millis(), "credentials updated via web UI");
+			delay(500);
+			ESP.restart();
 		});
 	}
 
 	void registerPortalRoutes() {
-		server.on("/generate_204", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-		server.on("/hotspot-detect.html", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-		server.on("/connecttest.txt", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
-		server.on("/ncsi.txt", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			req->send(200, "text/html", renderConfigPage());
-		});
+		const char* portal_paths[] = { "/generate_204", "/hotspot-detect.html", "/connecttest.txt", "/ncsi.txt" };
+		for (const char* path : portal_paths) {
+			server.on(path, HTTP_GET, [this](AsyncWebServerRequest* req) {
+				req->send(200, "text/html", renderConfigPage());
+			});
+		}
 	}
 
 	void registerResetWiFi() {
 		server.on("/clear", HTTP_GET, [this](AsyncWebServerRequest* req) {
 			if (req->hasArg("confirm")) {
-				logMessage("Reset WiFi requested. Clearing saved credentials and rebooting.");
 				Preferences clearPrefs;
 				clearPrefs.begin("wifi", false);
 				clearPrefs.clear();
@@ -471,99 +525,65 @@ public:
 
 	void handle() {
 		unsigned long now = millis();
-		monitorConnection(now);
+		if (ap_mode) {
+			dnsServer.processNextRequest();
+		}
 
 		switch (state) {
-			case WiFiState::BOOT:
-				if (shouldRefreshScan(now)) {
-					scanCache = scanWiFi();
-					last_scan = now;
-					scan_requested = false;
-				}
-				break;
-
 			case WiFiState::TRY_STA:
-				beginStaAttempt(now, ap_mode ? "AP+STA reconnect attempt" : "STA connect requested");
+				if (!beginSta(now, "initial startup"))
+                    startAP(now, "beginSta failed");
 				break;
 
 			case WiFiState::STA_WAIT:
 				if (WiFi.status() == WL_CONNECTED) {
-					last_wifi_status = WL_CONNECTED;
-					disconnect_detected_at = 0;
-					sta_attempt_in_progress = false;
+					last_sta_ok_at = now;
+					disconnect_started_at = 0;
 					logMessage("STA connected. IP: %s, BSSID: %s, RSSI: %d dBm",
 						WiFi.localIP().toString().c_str(),
 						WiFi.BSSIDstr().c_str(),
 						WiFi.RSSI());
 					if (start_web_server) start_web_server();
-					if (ap_mode) {
-						stopAP();
-					}
-					transitionTo(WiFiState::BOOT, now, "STA connected");
-				} else if (now - state_start > 10000) {
-					logMessage("STA connection timed out after %lu ms", now - state_start);
-					sta_attempt_in_progress = false;
-					if (ap_mode) {
-						transitionTo(WiFiState::AP_ACTIVE, now, "STA timeout with AP preserved");
-					} else {
-						transitionTo(WiFiState::START_AP, now, "STA timeout");
-					}
+					setState(WiFiState::STA_CONNECTED, now, "STA connected");
+				} else if (now - state_started_at > WiFiConfig::sta_timeout) {
+					startAP(now, "STA timeout");
 				}
 				break;
 
-			case WiFiState::START_AP:
-				startAP();
-				disconnect_detected_at = now;
-				transitionTo(WiFiState::AP_ACTIVE, now, "AP started");
-				ap_start = now;
-				last_scan = now;
-				if (ssid.length() && !sta_attempt_in_progress && now - last_sta_attempt >= retry_interval) {
-					transitionTo(WiFiState::TRY_STA, now, "AP active retry window open");
+			case WiFiState::STA_CONNECTED:
+				if (WiFi.status() == WL_CONNECTED) {
+					last_sta_ok_at = now;
+					disconnect_started_at = 0;
+					break;
+				}
+				if (last_sta_ok_at != 0 && now - last_sta_ok_at < 30000) {
+					break;
+				}
+				if (!ap_mode && disconnect_started_at == 0) {
+					disconnect_started_at = now;
+					break;
+				}
+				if (!ap_mode && now - disconnect_started_at >= 5000) {
+					startAP(now, "runtime STA disconnect");
 				}
 				break;
 
 			case WiFiState::AP_ACTIVE:
-				if (shouldRefreshScan(now)) {
-					scanCache = scanWiFi();
-					last_scan = now;
-					scan_requested = false;
+				if (now - ap_started_at > WiFiConfig::ap_timeout) {
+					logMessage("AP timeout expired. Rebooting device.");
+					delay(500);
+					ESP.restart();
 				}
-				if (ssid.length() && !sta_attempt_in_progress && now - last_sta_attempt >= retry_interval) {
-					transitionTo(WiFiState::TRY_STA, now, "AP+STA periodic retry");
-					break;
-				}
-				if (now - ap_start > ap_timeout && WiFi.softAPgetStationNum() == 0) {
-					if (ssid.length()) {
-						logMessage("AP timeout expired with no clients. Keeping AP+STA recovery active.");
-						ap_start = now;
-					} else {
-						logMessage("No credentials. Holding AP active.");
-						ap_start = now;
-					}
-				}
-				break;
-
-			default:
 				break;
 		}
 	}
 
 	String renderWiFiOptions() {
-		if (scan_requested) return "<option disabled>Scanning...</option>";
-		if (!scanCache.success) return "<option disabled>Scan failed</option>";
+		if (!scanCache.success) return "<option disabled>Loading networks...</option>";
 		String options;
-		String connected_bssid = WiFi.status() == WL_CONNECTED ? WiFi.BSSIDstr() : String();
-		bool selected_connected_bssid = false;
-		bool selected_saved_ssid = false;
 		for (size_t i = 0; i < scanCache.ssids.size(); ++i) {
 			options += "<option value='" + scanCache.ssids[i] + "'";
-			if (!selected_connected_bssid && connected_bssid.length() > 0 && i < scanCache.bssids.size() && scanCache.bssids[i] == connected_bssid) {
-				options += " selected";
-				selected_connected_bssid = true;
-			} else if (!selected_connected_bssid && !selected_saved_ssid && scanCache.ssids[i] == ssid) {
-				options += " selected";
-				selected_saved_ssid = true;
-			}
+			if (scanCache.ssids[i] == ssid) options += " selected";
 			options += ">";
 			options += scanCache.ssids[i] + " (" + String(scanCache.rssis[i]) + " dBm)";
 			if (i < scanCache.bssids.size()) {
@@ -571,11 +591,13 @@ public:
 			}
 			options += "</option>";
 		}
-		if (options.length() == 0) return "<option disabled>No networks found</option>";
+		if (!options.length()) return "<option disabled>No networks found</option>";
 		return options;
 	}
 
 	String renderConfigPage() {
+		String initial_options = renderWiFiOptions();
+		if (!initial_options.length()) initial_options = "<option disabled>Loading networks...</option>";
 		String page = R"rawliteral(
 		<!DOCTYPE html>
 		<html lang="en">
@@ -624,9 +646,6 @@ public:
 					border: none;
 					cursor: pointer;
 				}
-				input[type="submit"]:hover {
-					background-color: #0056b3;
-				}
 				.actions {
 					margin-top: 1rem;
 					display: flex;
@@ -641,17 +660,15 @@ public:
 					text-decoration: none;
 					text-align: center;
 				}
-				@media (max-width: 400px) {
-					body { padding: 1em; }
-				}
 			</style>
 		</head>
 		<body>
 			<h2>Configure WiFi</h2>
 			<form method="POST" action="/config">
+				<div style="margin-bottom:0.75em; font-size:0.95em; color:#666;">Scanning for nearby networks...</div>
 				<label for="ssidList">SSID:</label>
 				<select name="ssid" id="ssidList">
-					<option disabled>Loading...</option>
+					%SSID_OPTIONS%
 				</select>
 
 				<label for="pass">Password:</label>
@@ -663,58 +680,34 @@ public:
 				<label for="ip">IP address:</label>
 				<input type="text" name="ip" id="ip" value="%STA_IP%" placeholder="Leave blank for DHCP" inputmode="decimal" autocomplete="off">
 
-				<input type="submit" value="Save & Reconnect">
+				<input type="submit" value="Save & Reboot">
 			</form>
 
 			<div class="actions">
 				<a href="/clear" class="button-link">Clear Preferences</a>
 			</div>
-
 			<script>
-				window.addEventListener('load', () => {
-					const select = document.getElementById('ssidList');
-					const loadScan = () => {
-						fetch('/scan')
-							.then(response => {
-								if (!response.ok) throw new Error('HTTP ' + response.status);
-								return response.text();
-							})
-							.then(html => {
-								if (!select) return;
-								const content = html && html.trim().length
-									? html
-									: '<option disabled>No networks found</option>';
-								select.innerHTML = content;
-								if (content.includes('Scanning...')) {
-									setTimeout(loadScan, 1500);
+				const refreshScan = () => {
+					fetch('/scan', { cache: 'no-store' }).catch(() => {});
+					const poll = setInterval(() => {
+						fetch('/scan', { cache: 'no-store' })
+							.then((r) => r.text())
+							.then((html) => {
+								if (!html.includes('Scan failed') && !html.includes('scan started')) {
+									const list = document.getElementById('ssidList');
+									if (list) list.innerHTML = html;
+									clearInterval(poll);
 								}
 							})
-							.catch(err => {
-								console.error('Scan fetch failed:', err);
-								if (select) {
-									select.innerHTML = '<option disabled>Scan request failed</option>';
-								}
-							});
-					};
-					setTimeout(loadScan, 300);
-				});
-
-				document.querySelector('form').addEventListener('submit', async (event) => {
-					event.preventDefault();
-					const form = event.currentTarget;
-					const formData = new FormData(form);
-					const response = await fetch('/config', {
-						method: 'POST',
-						body: formData
-					});
-					document.open();
-					document.write(await response.text());
-					document.close();
-				});
+							.catch(() => {});
+					}, 800);
+				};
+				refreshScan();
 			</script>
 		</body>
 		</html>
 		)rawliteral";
+		page.replace("%SSID_OPTIONS%", initial_options);
 		page.replace("%HOST_NAME%", host_name);
 		page.replace("%STA_IP%", sta_ip);
 		return page;

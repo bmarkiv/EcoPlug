@@ -10,5 +10,7 @@ static constexpr const char* kApPassword = "setup123";
 // AP mode network settings. Edit kApIp when you want a different portal IP.
 static constexpr const char* kApIp = "10.0.2.1";
 static constexpr const char* kApSubnet = "255.255.255.0";
+static constexpr const unsigned long  sta_timeout = 10000;
+static constexpr const unsigned long  ap_timeout = 120000;
 
 }  // namespace WiFiConfig
