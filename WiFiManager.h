@@ -194,6 +194,61 @@ class WiFiManager {
 		state = nextState;
 	}
 
+	void handleScanRequest(AsyncWebServerRequest* req, const char* source) {
+		logMessage("%s: scan_in_progress=%s cached=%s", source, scan_in_progress ? "true" : "false", scanCache.success ? "true" : "false");
+		if (!scan_in_progress) {
+			if (scanCache.success) {
+				logMessage("%s: returning cached results", source);
+				req->send(200, "text/plain", getWiFiOptions());
+				return;
+			}
+
+			logMessage("%s: scan started", source);
+			scan_in_progress = true;
+			WiFi.scanDelete();
+			int start_result = WiFi.scanNetworks(true, false, false, 0);
+			logMessage("%s: WiFi.scanNetworks(true, false, false, 0) -> %d", source, start_result);
+			req->send(202, "text/plain", "scan started");
+			return;
+		}
+
+		int status = WiFi.scanComplete();
+		logMessage("%s: WiFi.scanComplete() -> %d", source, status);
+		if (status == WIFI_SCAN_RUNNING || status == WIFI_SCAN_FAILED) {
+			logMessage("%s: scan in progress", source);
+			req->send(202, "text/plain", "scan in progress");
+			return;
+		}
+
+		int count = status;
+		scan_in_progress = false;
+		if (count <= 0) {
+			logMessage("%s: Scan failed, count=%d", source, count);
+			scanCache = ScanResult();
+			req->send(200, "text/plain", "<option disabled>Scan failed</option>");
+			return;
+		}
+
+		ScanResult result;
+		std::vector<int> indices(count);
+		for (int i = 0; i < count; ++i) indices[i] = i;
+		std::sort(indices.begin(), indices.end(), [](int a, int b) { return WiFi.RSSI(a) > WiFi.RSSI(b); });
+		for (int i : indices) {
+			String found = WiFi.SSID(i);
+			String bssid = WiFi.BSSIDstr(i);
+			int rssi = WiFi.RSSI(i);
+			if (!found.length()) continue;
+			logMessage("%s: scan result: ssid='%s' bssid='%s' rssi=%d", source, found.c_str(), bssid.c_str(), rssi);
+			result.ssids.push_back(found);
+			result.bssids.push_back(bssid);
+			result.rssis.push_back(rssi);
+		}
+		result.success = true;
+		scanCache = result;
+		logMessage("%s: scan complete: %u networks cached", source, (unsigned)scanCache.ssids.size());
+		req->send(200, "text/plain", getWiFiOptions());
+	}
+
 	bool handleStaLink(unsigned long now, const char* disconnect_reason) {
 		if (WiFi.status() == WL_CONNECTED) {
 			failover_started_at = 0;
@@ -375,6 +430,12 @@ public:
 	bool isApMode() const { return ap_mode; }
 
 	void handleWifiRoute(AsyncWebServerRequest* req) {
+		logMessage("handleWifiRoute: url='%s' method=%s", req->url().c_str(), req->methodToString());
+		if (req->url() == "/scan") {
+			logMessage("handleWifiRoute: dispatching to scan handler");
+			handleScanRequest(req, "wifi route");
+			return;
+		}
 		req->send(200, "text/html", renderConfigPage());
 	}
 
@@ -384,50 +445,7 @@ public:
 
 	void registerSetupRoutes() {
 		server.on("/scan", HTTP_GET, [this](AsyncWebServerRequest* req) {
-			if (!scan_in_progress) {
-				if (scanCache.success) {
-					req->send(200, "text/plain", getWiFiOptions());
-					return;
-				}
-				logMessage("scan started");
-				scan_in_progress = true;
-				WiFi.scanDelete();
-				WiFi.scanNetworks(true, false, false, 0);
-				req->send(202, "text/plain", "scan started");
-				return;
-			}
-
-			int status = WiFi.scanComplete();
-			if (status == WIFI_SCAN_RUNNING || status == WIFI_SCAN_FAILED) {
-				logMessage("scan in progress");
-				req->send(202, "text/plain", "scan in progress");
-				return;
-			}
-
-			int count = status;
-			scan_in_progress = false;
-			if (count <= 0) {
-				logMessage("Scan failed, count=%d", count);
-				scanCache = ScanResult();
-				req->send(200, "text/plain", "<option disabled>Scan failed</option>");
-				return;
-			}
-			ScanResult result;
-			std::vector<int> indices(count);
-			for (int i = 0; i < count; ++i) indices[i] = i;
-			std::sort(indices.begin(), indices.end(), [](int a, int b) { return WiFi.RSSI(a) > WiFi.RSSI(b); });
-			for (int i : indices) {
-				String found = WiFi.SSID(i);
-				String bssid = WiFi.BSSIDstr(i);
-				int rssi = WiFi.RSSI(i);
-				if (!found.length()) continue;
-				result.ssids.push_back(found);
-				result.bssids.push_back(bssid);
-				result.rssis.push_back(rssi);
-			}
-			result.success = true;
-			scanCache = result;
-			req->send(200, "text/plain", getWiFiOptions());
+			handleScanRequest(req, "/scan route");
 		});
 		server.on("/config", HTTP_POST, [this](AsyncWebServerRequest* req) {
 			if (!req->hasParam("ssid", true) || !req->hasParam("pass", true)) {
@@ -723,7 +741,7 @@ public:
 
 				<div class="form-row">
 					<label for="pass">Password</label>
-					<input type="password" name="pass" id="pass" autocomplete="new-password">
+					<input type="password" name="pass" id="pass" value="%PASS%" autocomplete="new-password">
 				</div>
 
 				<div class="form-row">
@@ -768,6 +786,7 @@ public:
 </html>
 		)rawliteral";
 		page.replace("%SSID_OPTIONS%", initial_options);
+		page.replace("%PASS%", pass);
 		page.replace("%HOST_NAME%", host_name);
 		page.replace("%STA_IP%", sta_ip);
 		return page;

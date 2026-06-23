@@ -5,6 +5,7 @@
 #include <Preferences.h>
 #include <time.h>
 #include "WiFiManager.h"
+#include "utils.hpp"
 #include "index_html_gz.h"
 
 #define MAX_DURATION_ON    5 * 3600 * 1000  // 5 hours
@@ -27,15 +28,7 @@ struct ScheduleConfig {
     uint16_t duration_min = 120;    // 2h
 };
 
-static int32_t tz_offset_min = 0;
-static int64_t utc_base_sec = 0;
-static uint32_t utc_base_millis = 0;
-static bool utc_synced = false;
-static bool ntp_time_valid = false;
-static bool ntp_started = false;
-static unsigned long last_ntp_poll_ms = 0;
 static unsigned long last_ws_heartbeat_ms = 0;
-static Preferences time_prefs;
 
 // -------------------- Channel --------------------
 // Groups all per-relay state so filter and refill share one code path.
@@ -68,42 +61,11 @@ int find_char(const char *str, char c);
 bool schedules_overlap(const ScheduleConfig &a, const ScheduleConfig &b);
 void set_channel_output(Channel &ch, bool on);
 void send_websocket_heartbeat(unsigned long now_ms);
-void app_log(const char* format, ...);
 
 AsyncWebServer server(80);
 static bool http_server_initialized = false;
 static bool ota_initialized = false;
 WiFiManager wifiManager(server, WiFiConfig::kApSsid, WiFiConfig::kApPassword, &http_server_initialized);
-
-// -------------------- Logging --------------------
-void app_log(const char* format, ...) {
-    char buffer[256];
-    unsigned long now_ms = millis();
-    int size = 0;
-
-    if (utc_synced) {
-        int64_t local_sec = now_utc_sec() - (int64_t)tz_offset_min * 60;
-        unsigned long ms = now_ms % 1000;
-        time_t t = (time_t)local_sec;
-        struct tm tm_buf;
-        gmtime_r(&t, &tm_buf);
-        size = snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d %02d:%02d:%02d.%03lu: ",
-                        tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
-                        tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec, ms);
-    } else {
-        auto ms = now_ms % 1000, s = now_ms / 1000, m = s / 60, h = m / 60, d = h / 24;
-        size = snprintf(buffer, sizeof(buffer), "%lu %02lu:%02lu:%02lu.%03lu: ", d, h % 24, m % 60, s % 60, ms);
-    }
-
-    if (size < 0) size = 0;
-    if (size >= (int)sizeof(buffer)) size = (int)sizeof(buffer) - 1;
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer + size, sizeof(buffer) - size, format, args);
-    va_end(args);
-    Serial.println(buffer);
-    if (ws_filter.count()) ws_filter.textAll(buffer);
-}
 
 // -------------------- IO Setup --------------------
 void setup_io() {
@@ -211,85 +173,17 @@ void save_channel_schedule(Channel &ch) {
     p.end();
 }
 
-void load_timezone() {
-    // Dedicated namespace for timezone.
-    time_prefs.begin("time", true);
-    if (time_prefs.isKey("tz")) {
-        tz_offset_min = time_prefs.getInt("tz", 0);
-        time_prefs.end();
-        return;
-    }
-    time_prefs.end();
-
-    // Backward compatibility: old versions stored tz in schedule namespace.
-    Preferences p;
-    p.begin("schedule", true);
-    tz_offset_min = p.getInt("tz", 0);
-    p.end();
-}
-
-void save_timezone() {
-    time_prefs.begin("time", false);
-    time_prefs.putInt("tz", tz_offset_min);
-    time_prefs.end();
-}
-
-// -------------------- Time --------------------
-bool sync_time(int64_t epoch_utc_sec, int32_t tz_min) {
-    bool updated = false;
-    if (!ntp_time_valid) {
-        utc_base_sec = epoch_utc_sec;
-        utc_base_millis = millis();
-        utc_synced = true;
-        updated = true;
-    }
-    if (tz_offset_min != tz_min) {
-        tz_offset_min = tz_min;
-        save_timezone();
-        updated = true;
-    }
-    return updated;
-}
-
-void ensure_ntp_sync() {
-    if (WiFi.status() != WL_CONNECTED) return;
-    return;
-    if (!ntp_started) {
-        configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
-        ntp_started = true;
-        app_log("NTP started");
-    }
-    auto now_ms = millis();
-    if (now_ms - last_ntp_poll_ms < 5000) return;
-    last_ntp_poll_ms = now_ms;
-    time_t ntp_now = time(nullptr);
-    if (ntp_now > 1700000000) {
-        utc_base_sec = (int64_t)ntp_now;
-        utc_base_millis = now_ms;
-        if (!ntp_time_valid) app_log("NTP time acquired: %lld", (long long)utc_base_sec);
-        utc_synced = true;
-        ntp_time_valid = true;
-    }
-}
-
-int64_t now_utc_sec() {
-    if (!utc_synced) return -1;
-    return utc_base_sec + (int64_t)((millis() - utc_base_millis) / 1000);
-}
-
-int64_t now_local_sec() {
-    auto utc = now_utc_sec();
-    if (utc < 0) return -1;
-    return utc - (int64_t)tz_offset_min * 60;
-}
-
 // -------------------- Channel helpers --------------------
 static void buildStateJson(Channel &ch, unsigned long now) {
     auto local_sec = now_local_sec();
+    String wifi_ssid = WiFi.SSID();
+    String wifi_ip = WiFi.localIP().toString();
     ws_msg  = "{";
     ws_msg += "\"remaining_time\":\""     + String((ch.switch_off_time > now) ? (ch.switch_off_time - now) / 1000 : 0) + "\"";
     ws_msg += ",\"manual_duration_sec\":\"" + String(ch.manual_duration_sec)  + "\"";
     ws_msg += ",\"uptime\":\""            + String(now / 1000)                + "\"";
+    ws_msg += ",\"wifi_ssid\":\""         + wifi_ssid                         + "\"";
+    ws_msg += ",\"wifi_ip\":\""           + wifi_ip                           + "\"";
     ws_msg += ",\"schedule_enabled\":\""  + String(ch.cfg.enabled ? 1 : 0)    + "\"";
     ws_msg += ",\"schedule_days\":\""     + String(ch.cfg.days_mask)           + "\"";
     ws_msg += ",\"schedule_start\":\""    + String(ch.cfg.start_minute)        + "\"";
@@ -439,9 +333,7 @@ void check_channel_schedule(Channel &ch, unsigned long now_ms) {
 }
 
 // -------------------- WebSocket events --------------------
-// Each WS needs its own event handler bound to the right Channel.
-// Lambda captures are not allowed for AsyncWebSocket callbacks, so we use
-// two thin trampolines.
+// Each websocket is bound to a specific page/channel pair.
 void handleWebSocketMessage(Channel &ch, void *arg, char *data, size_t len) {
     AwsFrameInfo *info = (AwsFrameInfo *)arg;
     if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {

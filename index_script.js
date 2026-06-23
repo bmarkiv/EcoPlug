@@ -1,12 +1,14 @@
 (function () {
 	const pathname = window.location.pathname || '/';
 	const isRefill = pathname === '/refill' || pathname === '/refill/';
-	const WS_PATH = isRefill ? '/ws_refill' : '/ws';
+	const WS_PATH = '/ws';
 	const PAGE_TITLE = isRefill ? 'Refill Timer' : 'Filter Timer';
 	document.querySelector('h1').textContent = PAGE_TITLE;
 
 	const uptime = document.getElementById('uptime');
 	const currentTime = document.getElementById('current_time');
+	const wifiSsid = document.getElementById('wifi_ssid');
+	const wifiIp = document.getElementById('wifi_ip');
 	const connectionState = document.getElementById('connection_state');
 	const manualDurationHValue = document.getElementById('manual_duration_h_value');
 	const manualDurationMValue = document.getElementById('manual_duration_m_value');
@@ -193,6 +195,12 @@
 	const applyBackendState = (data) => {
 		if (Object.prototype.hasOwnProperty.call(data, 'manual_duration_sec')) {
 			applyManualDurationFromState(data['manual_duration_sec']);
+		}
+		if (wifiSsid && Object.prototype.hasOwnProperty.call(data, 'wifi_ssid')) {
+			wifiSsid.textContent = data['wifi_ssid'] || 'Connecting...';
+		}
+		if (wifiIp && Object.prototype.hasOwnProperty.call(data, 'wifi_ip')) {
+			wifiIp.textContent = data['wifi_ip'] || '0.0.0.0';
 		}
 		if (!ui_ready) {
 			ui_ready = true;
