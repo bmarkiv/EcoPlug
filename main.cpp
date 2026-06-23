@@ -1,9 +1,6 @@
 #include <AsyncTCP.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
-#include <ArduinoOTA.h>
-#include <Preferences.h>
-#include <time.h>
 #include "WiFiManager.h"
 #include "utils.hpp"
 #include "index_html_gz.h"
@@ -64,7 +61,6 @@ void send_websocket_heartbeat(unsigned long now_ms);
 
 AsyncWebServer server(80);
 static bool http_server_initialized = false;
-static bool ota_initialized = false;
 WiFiManager wifiManager(server, WiFiConfig::kApSsid, WiFiConfig::kApPassword, &http_server_initialized);
 
 // -------------------- IO Setup --------------------
@@ -477,10 +473,6 @@ void start_web_server() {
 
     server.begin();
     app_log("HTTP server started");
-
-    if (!ota_initialized) {
-        ota_initialized = true;
-    }
 }
 
 // -------------------- Main Loop --------------------
@@ -498,9 +490,8 @@ void setup(void) {
 void loop(void) {
     delay(2);
     c++;
-    wifiManager.handle();
     if (c % 100 == 0) {
-        ArduinoOTA.handle();
+        wifiManager.handle();
         ws_filter.cleanupClients();
         ws_refill.cleanupClients();
     }

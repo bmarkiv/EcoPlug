@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <stdarg.h>
+#include <ArduinoOTA.h>
 #include <Update.h>
 #include <vector>
 
@@ -55,6 +56,7 @@ class WiFiManager {
 	volatile bool update_finished = false;
 	volatile bool update_failed = false;
 	String update_filename;
+	bool ota_initialized = false;
 	void (*start_web_server)() = nullptr;
 	ScanResult scanCache;
 
@@ -756,6 +758,15 @@ public:
 
 	void handle() {
 		unsigned long now = millis();
+		if (!ota_initialized && (WiFi.status() == WL_CONNECTED || ap_mode)) {
+			ArduinoOTA.setHostname(host_name.length() ? host_name.c_str() : ap_ssid);
+			ArduinoOTA.begin();
+			ota_initialized = true;
+			logMessage("ArduinoOTA started");
+		}
+		if (ota_initialized) {
+			ArduinoOTA.handle();
+		}
 		if (ap_mode) {
 			dnsServer.processNextRequest();
 		}
