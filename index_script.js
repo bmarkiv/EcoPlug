@@ -1,7 +1,7 @@
 (function () {
 	const pathname = window.location.pathname || '/';
 	const isRefill = pathname === '/refill' || pathname === '/refill/';
-	const WS_PATH = '/ws';
+	const WS_PATH = isRefill ? '/ws_refill' : '/ws';
 	const PAGE_TITLE = isRefill ? 'Refill Timer' : 'Filter Timer';
 	document.querySelector('h1').textContent = PAGE_TITLE;
 

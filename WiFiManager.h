@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <stdarg.h>
+#include <Update.h>
 #include <vector>
 
 #include "WiFiConfig.h"
@@ -38,6 +39,7 @@ class WiFiManager {
 	WiFiState state = WiFiState::TRY_STA;
 	bool ap_mode = false;
 	bool scan_in_progress = false;
+	static constexpr size_t kUpdateProgressPollMs = 500;
 	Preferences prefs;
 	DNSServer dnsServer;
 	String ssid;
@@ -47,6 +49,12 @@ class WiFiManager {
 	IPAddress sta_local_ip;
 	bool sta_ip_valid = false;
 	IPAddress ap_ip;
+	volatile size_t update_bytes_received = 0;
+	volatile size_t update_bytes_total = 0;
+	volatile bool update_in_progress = false;
+	volatile bool update_finished = false;
+	volatile bool update_failed = false;
+	String update_filename;
 	void (*start_web_server)() = nullptr;
 	ScanResult scanCache;
 
@@ -422,6 +430,7 @@ public:
 			logWiFiEvent(event, info);
 		});
 		loadPrefs();
+		registerUpdateRoutes();
 		state = WiFiState::TRY_STA;
 	}
 
@@ -436,6 +445,10 @@ public:
 			handleScanRequest(req, "wifi route");
 			return;
 		}
+		if (req->url() == "/config" && req->method() == HTTP_POST) {
+			handleConfigPost(req);
+			return;
+		}
 		req->send(200, "text/html", renderConfigPage());
 	}
 
@@ -448,36 +461,43 @@ public:
 			handleScanRequest(req, "/scan route");
 		});
 		server.on("/config", HTTP_POST, [this](AsyncWebServerRequest* req) {
-			if (!req->hasParam("ssid", true) || !req->hasParam("pass", true)) {
-				req->send(400, "text/plain", "Missing SSID or password");
-				return;
-			}
-
-			ssid = req->getParam("ssid", true)->value();
-			pass = req->getParam("pass", true)->value();
-			host_name = req->hasParam("host", true) ? req->getParam("host", true)->value() : String();
-			sta_ip = req->hasParam("ip", true) ? req->getParam("ip", true)->value() : String();
-			host_name.trim();
-			sta_ip.trim();
-
-			prefs.begin("wifi", false);
-			prefs.putString("ssid", ssid);
-			prefs.putString("pass", pass);
-			prefs.putString("host", host_name);
-			prefs.putString("ip", sta_ip);
-			prefs.end();
-
-			AsyncWebServerResponse* response = req->beginResponse(
-				200,
-				"text/html",
-				"<h1>WiFi settings saved.</h1><h2>Device will reboot now.</h2><p>Reconnect after reboot.</p>");
-			response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-			response->addHeader("Pragma", "no-cache");
-			response->addHeader("Expires", "0");
-			req->send(response);
-			delay(500);
-			ESP.restart();
+			handleConfigPost(req);
 		});
+		server.on("/wifi", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderConfigPage());
+		});
+	}
+
+	void handleConfigPost(AsyncWebServerRequest* req) {
+		if (!req->hasParam("ssid", true) || !req->hasParam("pass", true)) {
+			req->send(400, "text/plain", "Missing SSID or password");
+			return;
+		}
+
+		ssid = req->getParam("ssid", true)->value();
+		pass = req->getParam("pass", true)->value();
+		host_name = req->hasParam("host", true) ? req->getParam("host", true)->value() : String();
+		sta_ip = req->hasParam("ip", true) ? req->getParam("ip", true)->value() : String();
+		host_name.trim();
+		sta_ip.trim();
+
+		prefs.begin("wifi", false);
+		prefs.putString("ssid", ssid);
+		prefs.putString("pass", pass);
+		prefs.putString("host", host_name);
+		prefs.putString("ip", sta_ip);
+		prefs.end();
+
+		AsyncWebServerResponse* response = req->beginResponse(
+			200,
+			"text/html",
+			"<h1>WiFi settings saved.</h1><h2>Device will reboot now.</h2><p>Reconnect after reboot.</p>");
+		response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+		response->addHeader("Pragma", "no-cache");
+		response->addHeader("Expires", "0");
+		req->send(response);
+		delay(500);
+		ESP.restart();
 	}
 
 	void registerPortalRoutes() {
@@ -487,6 +507,199 @@ public:
 				req->send(200, "text/html", renderConfigPage());
 			});
 		}
+	}
+
+	void resetUpdateState() {
+		update_bytes_received = 0;
+		update_bytes_total = 0;
+		update_in_progress = false;
+		update_finished = false;
+		update_failed = false;
+		update_filename = String();
+	}
+
+	String renderUpdatePage() {
+		String page = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Firmware update</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+    .bar { width: 100%; height: 20px; background: #e5e7eb; border-radius: 999px; overflow: hidden; }
+    .bar > div { height: 100%; width: 0%; background: #2563eb; transition: width 0.15s linear; }
+    .status { margin-top: 12px; font-size: 14px; }
+    .meta { margin-top: 6px; color: #4b5563; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>Firmware update</h1>
+  <form id="update-form" enctype="multipart/form-data">
+		<input type="file" name="update" id="update-file">
+    <input type="submit" value="Update">
+  </form>
+  <div style="margin-top: 20px;">
+    <div class="bar"><div id="progress"></div></div>
+    <div class="status" id="status">Idle</div>
+    <div class="meta" id="meta">0% | 0 / 0 bytes</div>
+  </div>
+  <script>
+    const progressEl = document.getElementById('progress');
+    const statusEl = document.getElementById('status');
+    const metaEl = document.getElementById('meta');
+    const formEl = document.getElementById('update-form');
+    const fileEl = document.getElementById('update-file');
+
+    const setProgress = (received, total) => {
+      const percent = total ? Math.min(100, Math.round((received * 100) / total)) : 0;
+      progressEl.style.width = percent + '%';
+      metaEl.textContent = percent + '% | ' + received + ' / ' + total + ' bytes';
+    };
+
+    const refresh = async () => {
+      try {
+        const response = await fetch('/update/status', { cache: 'no-store' });
+        const data = await response.json();
+        setProgress(data.received, data.total);
+
+        if (data.failed) {
+          statusEl.textContent = 'Update failed';
+        } else if (data.finished) {
+          statusEl.textContent = 'Verifying update, rebooting...';
+        } else if (data.inProgress) {
+          statusEl.textContent = 'Uploading ' + (data.filename || 'firmware.bin');
+        } else {
+          statusEl.textContent = 'Idle';
+        }
+      } catch (error) {
+        statusEl.textContent = 'Status unavailable';
+      }
+    };
+
+    formEl.addEventListener('submit', (event) => {
+      event.preventDefault();
+
+			if (!fileEl.files.length) {
+				statusEl.textContent = 'Choose a firmware file first';
+        return;
+      }
+
+      const formData = new FormData();
+			formData.append('update', fileEl.files[0]);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/update');
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          setProgress(event.loaded, event.total);
+					statusEl.textContent = 'Uploading ' + fileEl.files[0].name;
+        } else {
+					statusEl.textContent = 'Uploading ' + fileEl.files[0].name;
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          progressEl.style.width = '100%';
+					metaEl.textContent = '100% | ' + fileEl.files[0].size + ' / ' + fileEl.files[0].size + ' bytes';
+          statusEl.textContent = 'Verifying update, rebooting...';
+        } else {
+          statusEl.textContent = 'Update failed';
+        }
+      };
+
+      xhr.onerror = () => {
+        statusEl.textContent = 'Update failed';
+      };
+
+			statusEl.textContent = 'Starting upload...';
+			setProgress(0, fileEl.files[0].size || 0);
+      xhr.send(formData);
+    });
+
+    setInterval(refresh, 500);
+    refresh();
+  </script>
+</body>
+</html>
+)rawliteral";
+		return page;
+	}
+
+	void registerUpdateRoutes() {
+		server.on("/update", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			req->send(200, "text/html", renderUpdatePage());
+		});
+
+		server.on("/update/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
+			String json = R"({"received":)";
+			json += String((unsigned long)update_bytes_received);
+			json += R"(,"total":)";
+			json += String((unsigned long)update_bytes_total);
+			json += R"(,"inProgress":)";
+			json += update_in_progress ? "true" : "false";
+			json += R"(,"finished":)";
+			json += update_finished ? "true" : "false";
+			json += R"(,"failed":)";
+			json += update_failed ? "true" : "false";
+			json += R"(,"filename":")";
+			json += update_filename;
+			json += R"("})";
+			req->send(200, "application/json", json);
+		});
+
+		server.on("/update", HTTP_POST,
+			[this](AsyncWebServerRequest* req) {
+				bool success = !Update.hasError();
+				update_in_progress = false;
+				update_finished = success;
+				update_failed = !success;
+				req->send(200, "text/plain", success ? "OK. Rebooting..." : "FAIL");
+				if (success) {
+					delay(100);
+					ESP.restart();
+				}
+			},
+			[this](AsyncWebServerRequest* req, String filename, size_t index, uint8_t* data, size_t len, bool final) {
+				if (!index) {
+					logMessage("Update start: %s", filename.c_str());
+					update_filename = filename;
+					update_bytes_received = 0;
+					update_bytes_total = req->contentLength();
+					update_in_progress = true;
+					update_finished = false;
+					update_failed = false;
+					if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+						Update.printError(Serial);
+						update_in_progress = false;
+						update_failed = true;
+					}
+				}
+
+				if (!Update.hasError()) {
+					update_bytes_received = index + len;
+					if (Update.write(data, len) != len) {
+						Update.printError(Serial);
+						update_in_progress = false;
+						update_failed = true;
+					}
+				}
+
+				if (final) {
+					if (Update.end(true)) {
+						logMessage("Update complete: %u bytes", index + len);
+						update_bytes_received = index + len;
+						update_in_progress = false;
+						update_finished = true;
+					} else {
+						Update.printError(Serial);
+						update_in_progress = false;
+						update_failed = true;
+					}
+				}
+			});
 	}
 
 	void registerResetWiFi() {
@@ -764,21 +977,34 @@ public:
 	</div>
 	<script>
 		const refreshScan = () => {
-			const poll = setInterval(() => {
+			let pollActive = true;
+			const poll = () => {
+				if (!pollActive) return;
 				fetch('/scan', { cache: 'no-store' })
 					.then((r) => r.text())
 					.then((html) => {
+						const list = document.getElementById('ssidList');
 						if (html.includes('<option')) {
-							const list = document.getElementById('ssidList');
 							if (list) list.innerHTML = html;
-							clearInterval(poll);
-						} else if (!html.includes('scan in progress') && !html.includes('scan started')) {
-							clearInterval(poll);
+							pollActive = false;
+							return;
 						}
+						if (html.includes('Scan failed') || html.includes('No networks found')) {
+							if (list) list.innerHTML = html;
+							pollActive = false;
+							return;
+						}
+						if (html.includes('scan in progress') || html.includes('scan started')) {
+							setTimeout(poll, 800);
+							return;
+						}
+						pollActive = false;
 					})
-					.catch(() => {});
-			}, 800);
-			fetch('/scan', { cache: 'no-store' }).catch(() => {});
+					.catch(() => {
+						setTimeout(poll, 800);
+					});
+			};
+			poll();
 		};
 		refreshScan();
 	</script>
