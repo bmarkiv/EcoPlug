@@ -11,7 +11,7 @@
 #define PIN_REFILL_RELAY   25
 #define PIN_BLUE_LED       26
 
-static long c = 0;
+static unsigned long c = 0;
 static bool last_button_state = HIGH;
 static unsigned long last_button_time = 0;
 static unsigned long last_led_toggle_time = 0;
