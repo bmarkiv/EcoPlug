@@ -2,6 +2,10 @@
 #include <time.h>
 #include <WiFi.h>
 #include <Preferences.h>
+#include <LittleFS.h>
+#include <ESPAsyncWebServer.h>
+#include <memory>
+#include <vector>
 
 static int32_t tz_offset_min = 0;
 static int64_t utc_base_sec = 0;
@@ -14,6 +18,92 @@ static Preferences time_prefs;
 // extern AsyncWebSocket ws_control;
 
 void app_log(const char* format, ...);
+
+static constexpr const char* kLogPath = "/app.log";
+static constexpr const char* kPreviousLogPath = "/app.log.1";
+static constexpr size_t kMaxLogFileSize = 32768;
+static File app_log_file;
+static unsigned int app_log_lines_since_flush = 0;
+static bool app_log_filesystem_ready = false;
+
+bool init_app_log_storage() {
+    app_log_filesystem_ready = LittleFS.begin(false);
+    return app_log_filesystem_ready;
+}
+
+bool app_log_storage_ready() {
+    return app_log_filesystem_ready;
+}
+
+void flush_app_log() {
+    if (!app_log_filesystem_ready || !app_log_file) return;
+    app_log_file.flush();
+    app_log_lines_since_flush = 0;
+}
+
+void restart_after_log_flush(unsigned long wait_ms) {
+    flush_app_log();
+    delay(wait_ms);
+    ESP.restart();
+}
+
+void append_app_log_file(const char* line) {
+    if (!app_log_filesystem_ready) return;
+    if (!app_log_file) app_log_file = LittleFS.open(kLogPath, FILE_APPEND);
+    if (!app_log_file) return;
+    if (app_log_file.size() >= kMaxLogFileSize) {
+        app_log_file.close();
+        LittleFS.remove(kPreviousLogPath);
+        LittleFS.rename(kLogPath, kPreviousLogPath);
+        app_log_file = LittleFS.open(kLogPath, FILE_APPEND);
+        if (!app_log_file) return;
+    }
+    app_log_file.println(line);
+    if (++app_log_lines_since_flush >= 100) {
+        flush_app_log();
+    }
+}
+
+// Registers a GET route (default "/wifi-log") that streams the persisted
+// log files directly from LittleFS. Streaming avoids buffering the whole
+// (potentially 50+KB) log into a single String, which can silently fail
+// or return an empty response due to heap fragmentation.
+void register_app_log_route(AsyncWebServer &server, const char *path = "/app-log") {
+    server.on(path, HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (!app_log_storage_ready()) {
+            req->send(503, "text/plain", "Persistent logging unavailable: LittleFS is not mounted.\n");
+            return;
+        }
+        flush_app_log();
+        auto files = std::make_shared<std::vector<String>>();
+        files->push_back(kPreviousLogPath);
+        files->push_back(kLogPath);
+        auto file_index = std::make_shared<size_t>(0);
+        auto current_file = std::make_shared<File>();
+
+        AsyncWebServerResponse *response = req->beginChunkedResponse(
+            "text/plain",
+            [files, file_index, current_file](uint8_t *buffer, size_t maxLen, size_t) -> size_t {
+                while (true) {
+                    if (!*current_file) {
+                        while (*file_index < files->size()) {
+                            *current_file = LittleFS.open((*files)[*file_index], FILE_READ);
+                            (*file_index)++;
+                            if (*current_file) break;
+                        }
+                        if (!*current_file) return 0; // no more files, done
+                    }
+                    size_t n = current_file->read(buffer, maxLen);
+                    if (n > 0) return n;
+                    current_file->close();
+                    *current_file = File();
+                    if (*file_index >= files->size()) return 0;
+                }
+            });
+        req->send(response);
+    });
+}
+
 // -------------------- Time --------------------
 
 void save_timezone() {
@@ -114,5 +204,6 @@ void app_log(const char* format, ...) {
     vsnprintf(buffer + size, sizeof(buffer) - size, format, args);
     va_end(args);
     Serial.println(buffer);
+    append_app_log_file(buffer);
     // if (ws_control.count()) ws_control.textAll(buffer);
 }

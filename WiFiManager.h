@@ -15,6 +15,8 @@
 
 #include "WiFiConfig.h"
 
+void restart_after_log_flush(unsigned long wait_ms = 100);
+
 enum class WiFiState {
 	TRY_STA,
 	STA_WAIT,
@@ -411,8 +413,7 @@ class WiFiManager {
 		registerPortalRoutes();
 		server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *req) {
 			req->send(200, "text/plain", "Restarting...");
-			delay(500);
-			ESP.restart();
+			restart_after_log_flush(500);
 		});
 	}
 
@@ -500,8 +501,7 @@ public:
 		response->addHeader("Pragma", "no-cache");
 		response->addHeader("Expires", "0");
 		req->send(response);
-		delay(500);
-		ESP.restart();
+		restart_after_log_flush(500);
 	}
 
 	void registerPortalRoutes() {
@@ -662,8 +662,7 @@ public:
 				update_failed = !success;
 				req->send(200, "text/plain", success ? "OK. Rebooting..." : "FAIL");
 				if (success) {
-					delay(100);
-					ESP.restart();
+					restart_after_log_flush(100);
 				}
 			},
 			[this](AsyncWebServerRequest* req, String filename, size_t index, uint8_t* data, size_t len, bool final) {
@@ -721,8 +720,7 @@ public:
 				response->addHeader("Pragma", "no-cache");
 				response->addHeader("Expires", "0");
 				req->send(response);
-				delay(1500);
-				ESP.restart();
+				restart_after_log_flush(1500);
 				return;
 			}
 
@@ -797,8 +795,7 @@ public:
 			case WiFiState::AP_ACTIVE:
 				if (now - ap_started_at > WiFiConfig::ap_timeout) {
 					logMessage("AP timeout expired. Rebooting device.");
-					delay(500);
-					ESP.restart();
+					restart_after_log_flush(500);
 				}
 				break;
 		}

@@ -451,8 +451,7 @@ void start_web_server() {
         wifiManager.registerResetWiFi();
         server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *req) {
             req->send(200, "text/plain", "Restarting...");
-            delay(500);
-            ESP.restart();
+            restart_after_log_flush(500);
         });
         server.onNotFound([](AsyncWebServerRequest *request) {
             if (wifiManager.isApMode()) {
@@ -477,11 +476,17 @@ void setup(void) {
     ws_msg.reserve(256);
     setup_io();
     Serial.begin(115200);
+    if (init_app_log_storage()) {
+        app_log("File logging initialized");
+    } else {
+        app_log("File logging unavailable: LittleFS mount failed");
+    }
     wifiManager.setLogger(app_log);
     load_channel_schedule(filter_ch);
     load_channel_schedule(refill_ch);
     load_timezone();
     wifiManager.begin(start_web_server);
+    register_app_log_route(server);
 }
 
 void loop(void) {
