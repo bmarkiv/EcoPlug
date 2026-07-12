@@ -27,7 +27,17 @@ static unsigned int app_log_lines_since_flush = 0;
 static bool app_log_filesystem_ready = false;
 
 bool init_app_log_storage() {
-    app_log_filesystem_ready = LittleFS.begin(false);
+    if (LittleFS.begin(false)) {
+        app_log_filesystem_ready = true;
+        return true;
+    }
+
+    Serial.println("LittleFS mount failed; formatting filesystem...");
+    LittleFS.end();
+    app_log_filesystem_ready = LittleFS.begin(true);
+    if (!app_log_filesystem_ready) {
+        Serial.println("LittleFS mount failed after formatting");
+    }
     return app_log_filesystem_ready;
 }
 
@@ -64,7 +74,7 @@ void append_app_log_file(const char* line) {
     }
 }
 
-// Registers a GET route (default "/wifi-log") that streams the persisted
+// Registers a GET route (default "/app-log") that streams the persisted
 // log files directly from LittleFS. Streaming avoids buffering the whole
 // (potentially 50+KB) log into a single String, which can silently fail
 // or return an empty response due to heap fragmentation.
