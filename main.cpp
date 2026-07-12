@@ -1,6 +1,3 @@
-#include <AsyncTCP.h>
-#include <WiFi.h>
-#include <ESPAsyncWebServer.h>
 #include "WiFiManager.h"
 #include "utils.hpp"
 #include "index_html_gz.h"
