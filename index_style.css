@@ -175,6 +175,25 @@ h3 {
 	margin-bottom: 12px;
 }
 
+.channel-nav {
+	display: flex;
+	gap: 8px;
+	margin-left: auto;
+}
+
+.channel-nav a {
+	padding: 8px 10px;
+	border: 1px solid rgba(127, 127, 127, 0.35);
+	border-radius: 8px;
+	color: inherit;
+	text-decoration: none;
+}
+
+.channel-nav a:hover,
+.channel-nav a:focus {
+	text-decoration: underline;
+}
+
 .hours-display {
 	min-width: 92px;
 	text-align: center;

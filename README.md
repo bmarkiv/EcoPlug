@@ -49,7 +49,7 @@ upload_port = <ESP32-IP>
 
 If you have more than one device, always confirm `upload_port` points to the intended ESP32.
 
-AP SSID/password and captive portal IP are centralized in [WiFiConfig.h](WiFiConfig.h).
+AP SSID/password and captive portal IP are centralized in [../WifiManager/WifiManager.h](../WifiManager/WifiManager.h).
 
 ## 📶 First-Time WiFi Provisioning
 
@@ -57,7 +57,7 @@ When no STA credentials are saved, the device starts in AP mode.
 
 1. Connect to AP SSID: `SetupAP`
 2. AP password: `setup123`
-3. Open captive portal: `http://10.0.1.1`
+3. Open captive portal: `http://10.0.2.1`
 4. Select your WiFi SSID, enter password, then submit to save and reboot.
 
 ## 🧯 WiFi Recovery
@@ -67,7 +67,7 @@ If device cannot connect to your router or credentials are outdated:
 1. Open `http://<device-ip>/clear`
 2. Confirm reset of saved WiFi preferences
 3. Device reboots and returns to AP mode (`SetupAP`)
-4. Reconfigure WiFi at `http://10.0.1.1`
+4. Reconfigure WiFi at `http://10.0.2.1`
 
 ## 🔧 Serial Log Hint
 
@@ -75,6 +75,6 @@ This log line is expected when no STA credentials are stored:
 
 `[WiFiManager] No credentials. Holding AP.`
 
-It means AP provisioning mode is active and waiting for setup via `http://10.0.1.1`.
+It means AP provisioning mode is active and waiting for setup via `http://10.0.2.1`.
 
 If you need a different AP IP later, update [WiFiConfig.h](WiFiConfig.h) only.

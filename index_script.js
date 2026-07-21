@@ -1,7 +1,8 @@
 (function () {
 	const pathname = window.location.pathname || '/';
 	const isRefill = pathname === '/refill' || pathname === '/refill/';
-	const WS_PATH = isRefill ? '/ws_refill' : '/ws';
+	const WS_PATH = '/ws';
+	const CHANNEL = isRefill ? 'refill' : 'filter';
 	const PAGE_TITLE = isRefill ? 'Refill Timer' : 'Filter Timer';
 	document.querySelector('h1').textContent = PAGE_TITLE;
 
@@ -48,6 +49,9 @@
 	let last_ws_message_ms = Date.now();
 	let ui_ready = false;
 	let pending_manual_duration_sec = null;
+	let pending_run_duration_sec = null;
+	let run_command_sent_at = 0;
+	let run_command_duration_sec = null;
 	const pad0 = (n) => String(Math.floor(n)).padStart(2, '0');
 	const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 
@@ -196,11 +200,11 @@
 		if (Object.prototype.hasOwnProperty.call(data, 'manual_duration_sec')) {
 			applyManualDurationFromState(data['manual_duration_sec']);
 		}
-		if (wifiSsid && Object.prototype.hasOwnProperty.call(data, 'wifi_ssid')) {
-			wifiSsid.textContent = data['wifi_ssid'] || 'Connecting...';
+		if (wifiSsid && (Object.prototype.hasOwnProperty.call(data, 'ssid') || Object.prototype.hasOwnProperty.call(data, 'wifi_ssid'))) {
+			wifiSsid.textContent = data['ssid'] || data['wifi_ssid'] || 'Connecting...';
 		}
-		if (wifiIp && Object.prototype.hasOwnProperty.call(data, 'wifi_ip')) {
-			wifiIp.textContent = data['wifi_ip'] || '0.0.0.0';
+		if (wifiIp && (Object.prototype.hasOwnProperty.call(data, 'ip') || Object.prototype.hasOwnProperty.call(data, 'wifi_ip'))) {
+			wifiIp.textContent = data['ip'] || data['wifi_ip'] || '0.0.0.0';
 		}
 		if (!ui_ready) {
 			ui_ready = true;
@@ -223,7 +227,7 @@
 
 	const sendTimeSync = () => {
 		const epochSec = Math.floor(Date.now() / 1000);
-		const tzOffsetMin = new Date().getTimezoneOffset();
+		const tzOffsetMin = -new Date().getTimezoneOffset();
 		const msg = `sync_time:${epochSec}:${tzOffsetMin}`;
 		if (websocket.readyState === WebSocket.OPEN) websocket.send(msg);
 	};
@@ -300,6 +304,7 @@
 	const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 	let websocket = null;
 	window.websocket = null;
+	let channel_ready = false;
 
 	const connectWebSocket = () => {
 		if (websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
@@ -315,15 +320,13 @@
 			setConnectedState();
 			start_uptime_timer();
 			start_websocket_watchdog();
-			websocket.send('get_state:1');
+			channel_ready = false;
+			websocket.send('channel:' + CHANNEL);
 			sendTimeSync();
-			if (pending_manual_duration_sec !== null) {
-				websocket.send('set_manual_duration:' + pending_manual_duration_sec);
-				pending_manual_duration_sec = null;
-			}
 		};
 
 		websocket.onclose = function () {
+			channel_ready = false;
 			console.warn('WebSocket disconnected');
 			stop_uptime_timer();
 			stop_websocket_watchdog();
@@ -338,6 +341,19 @@
 		websocket.onmessage = function (event) {
 			try {
 				last_ws_message_ms = Date.now();
+				if (event.data === 'channel_ready:' + CHANNEL) {
+					channel_ready = true;
+					websocket.send(CHANNEL + ':get_state:1');
+					if (pending_run_duration_sec !== null) {
+						websocket.send(CHANNEL + ':set_duration:' + pending_run_duration_sec);
+						pending_run_duration_sec = null;
+					}
+					if (pending_manual_duration_sec !== null) {
+						websocket.send(CHANNEL + ':set_manual_duration:' + pending_manual_duration_sec);
+						pending_manual_duration_sec = null;
+					}
+					return;
+				}
 				if (event.data.startsWith('hb:')) {
 					return;
 				}
@@ -353,12 +369,15 @@
 				}
 				console.log(`event.data: ${event.data}`);
 				const data = JSON.parse(event.data);
-				if (data['uptime']) {
-					uptime_sec = parseInt(data['uptime']) * 1000;
+				if (data['uptimeSeconds'] !== undefined || data['uptime'] !== undefined) {
+					uptime_sec = parseInt(data['uptimeSeconds'] ?? data['uptime'], 10) * 1000;
 				}
 
-				remaining_time_sec = parseInt(data['remaining_time']) || 0;
-				switch_state.checked = remaining_time_sec != 0;
+				const reportedRemaining = parseInt(data['remaining_time'], 10) || 0;
+				if (run_command_duration_sec === 0 || reportedRemaining > 0 || Date.now() - run_command_sent_at > 1500) {
+					remaining_time_sec = reportedRemaining;
+					switch_state.checked = remaining_time_sec != 0;
+				}
 				renderTimeLeft();
 				renderManual();
 				applyBackendState(data);
@@ -399,8 +418,8 @@
 	};
 
 	const sendManualDurationToBackend = (seconds) => {
-		const msg = 'set_manual_duration:' + seconds;
-		if (websocket.readyState === WebSocket.OPEN) {
+		const msg = CHANNEL + ':set_manual_duration:' + seconds;
+		if (websocket.readyState === WebSocket.OPEN && channel_ready) {
 			websocket.send(msg);
 		} else {
 			pending_manual_duration_sec = seconds;
@@ -410,14 +429,21 @@
 	connectWebSocket();
 
 	const websocket_send_msg = () => {
-		const targetSec = switch_state.checked ? getManualDurationSeconds() : 0;
-		const msg = 'set_duration:' + targetSec;
-		if (websocket.readyState === WebSocket.OPEN) {
+		const targetSec = remaining_time_sec > 0 ? 0 : getManualDurationSeconds();
+		const msg = CHANNEL + ':set_duration:' + targetSec;
+		if (websocket.readyState === WebSocket.OPEN && channel_ready) {
 			console.log(`websocket.send: ${msg}`);
+			run_command_sent_at = Date.now();
+			run_command_duration_sec = targetSec;
+			if (targetSec === 0) {
+				remaining_time_sec = 0;
+				renderTimeLeft();
+			}
 			websocket.send(msg);
 			renderManual();
 		} else {
-			console.warn('WebSocket is not open, cannot send message');
+			pending_run_duration_sec = targetSec;
+			console.warn('WebSocket is not open; Run now command queued');
 		}
 	};
 

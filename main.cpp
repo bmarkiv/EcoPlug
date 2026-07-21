@@ -1,5 +1,4 @@
-#include "WiFiManager.h"
-#include "utils.hpp"
+#include "../WifiManager/WifiManager.h"
 #include "index_html_gz.h"
 
 #define MAX_DURATION_ON    5 * 3600 * 1000  // 5 hours
@@ -27,62 +26,80 @@ static unsigned long last_ws_heartbeat_ms = 0;
 // -------------------- Channel --------------------
 // Groups all per-relay state so filter and refill share one code path.
 struct Channel {
+    enum Kind { FILTER, REFILL };
+
+    Kind kind;
     const char *prefs_ns;   // NVS namespace
     const char *label;      // for log messages
     uint8_t pin;            // relay GPIO
-    AsyncWebSocket *ws;
-
+    bool output_state = LOW;
     ScheduleConfig cfg;
     uint32_t manual_duration_sec = MAX_DURATION_ON / 1000;
     unsigned long switch_off_time = 0;
     long last_schedule_local_day = -1;
     long last_schedule_checked_sec = -1;
 
-    Channel(const char *ns, const char *lbl, uint8_t p, AsyncWebSocket *sock)
-        : prefs_ns(ns), label(lbl), pin(p), ws(sock) {}
+    Channel(Kind k, const char *ns, const char *lbl, uint8_t p)
+        : kind(k), prefs_ns(ns), label(lbl), pin(p) {}
 };
 
-static AsyncWebSocket ws_filter("/ws");
-static AsyncWebSocket ws_refill("/ws_refill");
+static AsyncWebSocket ws("/ws");
 
-static Channel filter_ch{ "schedule", "Filter", PIN_RELAY,        &ws_filter };
-static Channel refill_ch{ "refill",   "Refill", PIN_REFILL_RELAY, &ws_refill };
+static Channel channels[] = {
+    { Channel::FILTER, "schedule", "Filter", PIN_RELAY },
+    { Channel::REFILL, "refill",   "Refill", PIN_REFILL_RELAY }
+};
+static constexpr size_t CHANNEL_COUNT = sizeof(channels) / sizeof(channels[0]);
+static Channel &filter_ch = channels[Channel::FILTER];
+static Channel &refill_ch = channels[Channel::REFILL];
 
 // Forward declarations
 void sendChannelState(Channel &ch, unsigned long now);
+void sendChannelStateToClient(Channel &ch, AsyncWebSocketClient *client, unsigned long now);
 int64_t now_utc_sec();
 int find_char(const char *str, char c);
-bool schedules_overlap(const ScheduleConfig &a, const ScheduleConfig &b);
 void set_channel_output(Channel &ch, bool on);
 void send_websocket_heartbeat(unsigned long now_ms);
 
 AsyncWebServer server(80);
-static bool http_server_initialized = false;
-WiFiManager wifiManager(server, WiFiConfig::kApSsid, WiFiConfig::kApPassword, &http_server_initialized);
+WifiManager::Options wifi_options;
+WifiManager wifiManager(server, [] {
+    WifiManager::Options options;
+    options.enableStatusWebSocket = false;
+    return options;
+}());
 
 // -------------------- IO Setup --------------------
 void setup_io() {
-    pinMode(PIN_RELAY,        OUTPUT); digitalWrite(PIN_RELAY,        LOW);
-    pinMode(PIN_REFILL_RELAY, OUTPUT); digitalWrite(PIN_REFILL_RELAY, LOW);
+    for (Channel &channel : channels) {
+        pinMode(channel.pin, OUTPUT);
+        digitalWrite(channel.pin, LOW);
+    }
     pinMode(PIN_BLUE_LED,     OUTPUT); digitalWrite(PIN_BLUE_LED,     LOW);
     pinMode(PIN_BUTTON, INPUT_PULLUP);
 }
 
-void switch_state(bool on) {
-    static bool current_state = LOW;
-    if (current_state == on) return;
-    current_state = on;
-    digitalWrite(PIN_RELAY, on ? HIGH : LOW);
-    app_log("Switch state changed: %s", on ? "ON" : "OFF");
-}
-
 void set_channel_output(Channel &ch, bool on) {
-    if (&ch == &filter_ch) {
-        switch_state(on);
-        return;
-    }
+    if (ch.output_state == on) return;
+    ch.output_state = on;
     digitalWrite(ch.pin, on ? HIGH : LOW);
     app_log("%s state changed: %s", ch.label, on ? "ON" : "OFF");
+}
+
+void sendChannelStateToClients(Channel &ch, unsigned long now) {
+    for (auto *client : ws.getClients()) {
+        if (client->_tempObject == &ch) {
+            sendChannelStateToClient(ch, client, now);
+        }
+    }
+}
+
+void stopExpiredChannel(Channel &ch, unsigned long now) {
+    if (!ch.switch_off_time || now <= ch.switch_off_time) return;
+    ch.switch_off_time = 0;
+    set_channel_output(ch, false);
+    sendChannelState(ch, now);
+    app_log("%s switched off due to timeout", ch.label);
 }
 
 bool minute_in_wrapped_range(int minute, int start, int end_exclusive) {
@@ -105,37 +122,6 @@ bool schedule_active_at_minute(const ScheduleConfig &cfg, int week_minute) {
         }
     }
     return false;
-}
-
-bool schedules_overlap(const ScheduleConfig &a, const ScheduleConfig &b) {
-    if (!a.enabled || !b.enabled) return false;
-    for (int m = 0; m < 10080; m++) {
-        if (schedule_active_at_minute(a, m) && schedule_active_at_minute(b, m)) return true;
-    }
-    return false;
-}
-
-bool schedules_overlap_ignoring_enabled(const ScheduleConfig &a, const ScheduleConfig &b) {
-    ScheduleConfig aa = a;
-    ScheduleConfig bb = b;
-    aa.enabled = true;
-    bb.enabled = true;
-    return schedules_overlap(aa, bb);
-}
-
-ScheduleConfig load_channel_schedule_snapshot(const char *prefs_ns) {
-    ScheduleConfig cfg;
-    Preferences p;
-    p.begin(prefs_ns, true);
-    cfg.enabled      = p.getBool("enabled", false);
-    cfg.days_mask    = (uint8_t)p.getUChar("days", 0x00);
-    cfg.start_minute = (uint16_t)p.getUInt("start", 8 * 60);
-    cfg.duration_min = (uint16_t)p.getUInt("dur", 120);
-    p.end();
-    if (cfg.start_minute > 1439) cfg.start_minute = 0;
-    if (cfg.duration_min == 0)   cfg.duration_min = 1;
-    if (cfg.duration_min > 720)  cfg.duration_min = 720;
-    return cfg;
 }
 
 // -------------------- Schedule persistence --------------------
@@ -175,8 +161,11 @@ static void buildStateJson(Channel &ch, unsigned long now) {
     ws_msg += "\"remaining_time\":\""     + String((ch.switch_off_time > now) ? (ch.switch_off_time - now) / 1000 : 0) + "\"";
     ws_msg += ",\"manual_duration_sec\":\"" + String(ch.manual_duration_sec)  + "\"";
     ws_msg += ",\"uptime\":\""            + String(now / 1000)                + "\"";
+    ws_msg += ",\"uptimeSeconds\":"       + String((unsigned long)(now / 1000));
     ws_msg += ",\"wifi_ssid\":\""         + wifi_ssid                         + "\"";
     ws_msg += ",\"wifi_ip\":\""           + wifi_ip                           + "\"";
+    ws_msg += ",\"ssid\":\""              + wifi_ssid                         + "\"";
+    ws_msg += ",\"ip\":\""                + wifi_ip                           + "\"";
     ws_msg += ",\"schedule_enabled\":\""  + String(ch.cfg.enabled ? 1 : 0)    + "\"";
     ws_msg += ",\"schedule_days\":\""     + String(ch.cfg.days_mask)           + "\"";
     ws_msg += ",\"schedule_start\":\""    + String(ch.cfg.start_minute)        + "\"";
@@ -193,16 +182,16 @@ void sendChannelStateToClient(Channel &ch, AsyncWebSocketClient *client, unsigne
 }
 
 void sendChannelState(Channel &ch, unsigned long now) {
-    if (!ch.ws->count()) return;
     buildStateJson(ch, now);
-    ch.ws->textAll(ws_msg);
+    for (auto *client : ws.getClients()) {
+        if (client->_tempObject == &ch) client->text(ws_msg);
+    }
 }
 
 void send_websocket_heartbeat(unsigned long now_ms) {
     if (now_ms - last_ws_heartbeat_ms < 2000) return;
     last_ws_heartbeat_ms = now_ms;
-    ws_filter.textAll("hb:1");
-    ws_refill.textAll("hb:1");
+    for (auto *client : ws.getClients()) client->text("hb:1");
 }
 
 int find_char(const char *str, char c) {
@@ -211,24 +200,28 @@ int find_char(const char *str, char c) {
 }
 
 void handleChannelMessage(Channel &ch, char *msg) {
+    if ((ch.kind == Channel::FILTER && strncmp(msg, "filter:", 7) == 0) ||
+        (ch.kind == Channel::REFILL && strncmp(msg, "refill:", 7) == 0)) {
+        msg += 7;
+    }
     int colon = find_char(msg, ':');
     if (colon < 0) { app_log("%s unsupported command: %s", ch.label, msg); return; }
 
     if (strncmp(msg, "set_duration:", 13) == 0) {
         auto now = millis();
         const char *p = msg + colon + 1;
+        long dur = atol(p);
+        if (dur < 0) dur = 0;
+        dur = min(12L * 3600L, dur);
         ch.switch_off_time = 0;
         set_channel_output(ch, false);
-        if (p[0] >= '0' && p[0] <= '9') {
-            long dur = atol(p);
-            if (dur > 0) {
-                ch.manual_duration_sec = (uint32_t)min(12L * 3600L, dur);
-                save_channel_schedule(ch);
-            }
+        if (dur > 0) {
+            ch.manual_duration_sec = (uint32_t)dur;
+            save_channel_schedule(ch);
             ch.switch_off_time = now + dur * 1000;
-            set_channel_output(ch, dur > 0);
-            app_log("%s duration_on: %ld", ch.label, dur);
+            set_channel_output(ch, true);
         }
+        app_log("%s duration_on: %ld", ch.label, dur);
         sendChannelState(ch, now);
         return;
     }
@@ -262,8 +255,7 @@ void handleChannelMessage(Channel &ch, char *msg) {
         if (updated) {
             // Broadcast updated time to both channels.
             auto now = millis();
-            sendChannelState(filter_ch, now);
-            sendChannelState(refill_ch, now);
+            for (Channel &channel : channels) sendChannelState(channel, now);
         }
         return;
     }
@@ -290,7 +282,9 @@ void handleChannelMessage(Channel &ch, char *msg) {
         save_channel_schedule(ch);
         app_log("%s schedule saved: enabled=%d days=%u start=%u duration=%u",
             ch.label, ch.cfg.enabled ? 1 : 0, ch.cfg.days_mask, ch.cfg.start_minute, ch.cfg.duration_min);
-        ch.ws->textAll("notice:Schedule saved");
+        for (auto *client : ws.getClients()) {
+            if (client->_tempObject == &ch) client->text("notice:Schedule saved");
+        }
         sendChannelState(ch, millis());
         return;
     }
@@ -326,7 +320,6 @@ void check_channel_schedule(Channel &ch, unsigned long now_ms) {
 }
 
 // -------------------- WebSocket events --------------------
-// Each websocket is bound to a specific page/channel pair.
 void handleWebSocketMessage(Channel &ch, void *arg, char *data, size_t len) {
     AwsFrameInfo *info = (AwsFrameInfo *)arg;
     if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
@@ -342,67 +335,49 @@ void handleWebSocketMessage(Channel &ch, void *arg, char *data, size_t len) {
     }
 }
 
-void onFilterEvent(AsyncWebSocket *srv, AsyncWebSocketClient *client,
-                   AwsEventType type, void *arg, uint8_t *data, size_t len) {
+void onWebSocketEvent(AsyncWebSocket *srv, AsyncWebSocketClient *client,
+                      AwsEventType type, void *arg, uint8_t *data, size_t len) {
     switch (type) {
         case WS_EVT_CONNECT:
-            sendChannelStateToClient(filter_ch, client, millis());
-            app_log("%s WS #%u connected from %s", filter_ch.label, client->id(), client->remoteIP().toString().c_str());
+            client->_tempObject = nullptr;
+            app_log("WS #%u connected from %s", client->id(), client->remoteIP().toString().c_str());
             break;
         case WS_EVT_DISCONNECT:
-            app_log("%s WS #%u disconnected", filter_ch.label, client->id());
+            app_log("WS #%u disconnected", client->id());
             break;
         case WS_EVT_DATA:
-            handleWebSocketMessage(filter_ch, arg, (char *)data, len);
-            break;
-        default: break;
-    }
-}
-
-void onRefillEvent(AsyncWebSocket *srv, AsyncWebSocketClient *client,
-                   AwsEventType type, void *arg, uint8_t *data, size_t len) {
-    switch (type) {
-        case WS_EVT_CONNECT:
-            sendChannelStateToClient(refill_ch, client, millis());
-            app_log("%s WS #%u connected from %s", refill_ch.label, client->id(), client->remoteIP().toString().c_str());
-            break;
-        case WS_EVT_DISCONNECT:
-            app_log("%s WS #%u disconnected", refill_ch.label, client->id());
-            break;
-        case WS_EVT_DATA:
-            handleWebSocketMessage(refill_ch, arg, (char *)data, len);
+            if (arg == nullptr) break;
+            {
+                AwsFrameInfo *info = (AwsFrameInfo *)arg;
+                if (!info->final || info->index != 0 || info->len != len || info->opcode != WS_TEXT) break;
+                char msg[128];
+                len = min(len, sizeof(msg) - 1);
+                memcpy(msg, data, len);
+                msg[len] = 0;
+                if (strncmp(msg, "channel:filter", 14) == 0) {
+                    client->_tempObject = &channels[Channel::FILTER];
+                    sendChannelStateToClient(channels[Channel::FILTER], client, millis());
+                    client->text("channel_ready:filter");
+                } else if (strncmp(msg, "channel:refill", 14) == 0) {
+                    client->_tempObject = &channels[Channel::REFILL];
+                    sendChannelStateToClient(channels[Channel::REFILL], client, millis());
+                    client->text("channel_ready:refill");
+                } else if (client->_tempObject != nullptr) {
+                    Channel &ch = *(Channel *)client->_tempObject;
+                    handleChannelMessage(ch, msg);
+                } else {
+                    app_log("WS #%u has no channel", client->id());
+                }
+            }
             break;
         default: break;
     }
 }
 
 // -------------------- Web Server --------------------
-unsigned long change_state(const char *data) {
-    auto now = millis();
-    if (data[0] == 'f') return now;
-    filter_ch.switch_off_time = 0;
-    set_channel_output(filter_ch, false);
-    if (data[0] < '0' || data[0] > '9') {
-        app_log("Invalid URL: '%s'", data);
-        return now;
-    }
-    long duration_on = atol(data);
-    filter_ch.switch_off_time = now + duration_on * 1000;
-    app_log("duration_on: %ld, switch_off_time: %ld", duration_on, filter_ch.switch_off_time - now);
-    set_channel_output(filter_ch, duration_on > 0);
-    return now;
-}
-
 void handleNotFound(AsyncWebServerRequest *request) {
-    const char *uri = request->url().c_str();
-    app_log("uri-raw: %s", uri);
-    while (*uri == '/') uri++;
-    if (!isdigit(uri[0])) {
-        request->send(404, "text/plain", "Not found");
-        return;
-    }
-    sendChannelState(filter_ch, change_state(uri));
-    request->send(200, "text/plain", "OK");
+    app_log("Not found: %s", request->url().c_str());
+    request->send(404, "text/plain", "Not found");
 }
 
 void serve_index(AsyncWebServerRequest *request, const char *cache_control) {
@@ -420,55 +395,19 @@ void serve_index(AsyncWebServerRequest *request, const char *cache_control) {
 }
 
 void start_web_server() {
-    if (!http_server_initialized) {
-        server.on("/", HTTP_GET, [](AsyncWebServerRequest *r) {
-            if (wifiManager.isApMode()) {
-                r->send(200, "text/html", wifiManager.renderConfigPage());
-                return;
-            }
-            serve_index(r, "max-age=86400");
+    const char *refill_paths[] = { "/refill", "/refill/" };
+    for (const char *path : refill_paths) {
+        server.on(path, HTTP_GET, [](AsyncWebServerRequest *r) {
+            serve_index(r, "no-store");
         });
-
-        const char *refill_paths[] = { "/refill", "/refill/" };
-        for (const char *path : refill_paths) {
-            server.on(path, HTTP_GET, [](AsyncWebServerRequest *r) {
-                if (wifiManager.isApMode()) {
-                    r->send(200, "text/html", wifiManager.renderConfigPage());
-                    return;
-                }
-                serve_index(r, "no-store");
-            });
-        }
-
-        const char *wifi_paths[] = { "/wifi", "/wifi/", "/refill/wifi", "/refill/wifi/" };
-        for (const char *path : wifi_paths) {
-            server.on(path, HTTP_GET, [](AsyncWebServerRequest *r) {
-                wifiManager.handleWifiRoute(r);
-            });
-        }
-
-        wifiManager.registerSetupRoutes();
-        wifiManager.registerResetWiFi();
-        server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *req) {
-            req->send(200, "text/plain", "Restarting...");
-            restart_after_log_flush(500);
-        });
-        server.onNotFound([](AsyncWebServerRequest *request) {
-            if (wifiManager.isApMode()) {
-                request->send(200, "text/html", wifiManager.renderConfigPage());
-                return;
-            }
-            handleNotFound(request);
-        });
-        ws_filter.onEvent(onFilterEvent);
-        ws_refill.onEvent(onRefillEvent);
-        server.addHandler(&ws_filter);
-        server.addHandler(&ws_refill);
-        http_server_initialized = true;
     }
-
-    server.begin();
-    app_log("HTTP server started");
+    server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *req) {
+        req->send(200, "text/plain", "Restarting...");
+        delay(500);
+        ESP.restart();
+    });
+    ws.onEvent(onWebSocketEvent);
+    server.addHandler(&ws);
 }
 
 // -------------------- Main Loop --------------------
@@ -476,32 +415,31 @@ void setup(void) {
     ws_msg.reserve(256);
     setup_io();
     Serial.begin(115200);
-    if (init_app_log_storage()) {
-        app_log("File logging initialized");
-    } else {
-        app_log("File logging unavailable: LittleFS mount failed");
-    }
-    wifiManager.setLogger(app_log);
-    load_channel_schedule(filter_ch);
-    load_channel_schedule(refill_ch);
+    for (Channel &channel : channels) load_channel_schedule(channel);
     load_timezone();
-    wifiManager.begin(start_web_server);
-    register_app_log_route(server);
+    wifiManager.setHomeHandler([](AsyncWebServerRequest *request) {
+        serve_index(request, "max-age=86400");
+    });
+    wifiManager.setNotFoundHandler(handleNotFound);
+    wifiManager.setStatusHandler([]() {
+        auto now = millis();
+        for (Channel &channel : channels) sendChannelState(channel, now);
+    });
+    wifiManager.begin();
+    start_web_server();
 }
 
 void loop(void) {
     delay(2);
+    wifiManager.loop();
     c++;
     if (c % 100 == 0) {
-        wifiManager.handle();
-        ws_filter.cleanupClients();
-        ws_refill.cleanupClients();
+        ws.cleanupClients();
     }
 
     auto now = millis();
     ensure_ntp_sync();
-    check_channel_schedule(filter_ch, now);
-    check_channel_schedule(refill_ch, now);
+    for (Channel &channel : channels) check_channel_schedule(channel, now);
     send_websocket_heartbeat(now);
 
     bool button = digitalRead(PIN_BUTTON);
@@ -515,19 +453,7 @@ void loop(void) {
     }
     last_button_state = button;
 
-    if (filter_ch.switch_off_time && now > filter_ch.switch_off_time) {
-        filter_ch.switch_off_time = 0;
-        set_channel_output(filter_ch, false);
-        sendChannelState(filter_ch, now);
-        app_log("Filter switched off due to timeout");
-    }
-
-    if (refill_ch.switch_off_time && now > refill_ch.switch_off_time) {
-        refill_ch.switch_off_time = 0;
-        set_channel_output(refill_ch, false);
-        sendChannelState(refill_ch, now);
-        app_log("Refill switched off due to timeout");
-    }
+    for (Channel &channel : channels) stopExpiredChannel(channel, now);
 
     if (WiFi.status() != WL_CONNECTED) {
         if (now - last_led_toggle_time >= 500) {
